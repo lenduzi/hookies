@@ -1,0 +1,21 @@
+# Environment & secrets
+.env
+credentials.json
+token.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated output — don't commit videos/audio
+output/*.mp4
+output/*.mp3
+output/*.ass
+
+# Temp working files
+tmp/
+
+# macOS
+.DS_Store

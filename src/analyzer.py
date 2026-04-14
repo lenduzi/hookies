@@ -87,7 +87,7 @@ def analyze_clips(clip_paths: list[str]) -> list[dict]:
                 image_data = base64.standard_b64encode(f.read()).decode("utf-8")
 
             response = client.messages.create(
-                model="claude-opus-4-5",
+                model="claude-sonnet-4-6",
                 max_tokens=500,
                 messages=[
                     {

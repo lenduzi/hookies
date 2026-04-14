@@ -36,7 +36,7 @@ def plan_edits(clip_analyses: list[dict]) -> dict:
     print(f"\n🎬 Planning {NUM_CUTS} distinct edits with Claude...")
 
     response = client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
