@@ -530,3 +530,98 @@ def download_file(project_id: str, filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(str(path), media_type="video/mp4", filename=filename)
+
+
+# ── Routes: clip library ──────────────────────────────────────────────────────
+
+def _thumbs_dir(project_id: str) -> Path:
+    d = _project_dir(project_id) / ".thumbs"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _clip_duration(clip_path: str) -> float:
+    import subprocess
+    r = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", clip_path],
+        capture_output=True, text=True,
+    )
+    try:
+        return round(float(r.stdout.strip()), 1)
+    except ValueError:
+        return 0.0
+
+
+def _extract_thumb(clip_path: str, thumb_path: str) -> bool:
+    import subprocess
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.5", "-i", clip_path,
+         "-vframes", "1", "-vf", "scale=200:-1", thumb_path],
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+@app.get("/api/projects/{project_id}/clips")
+def get_clips(project_id: str):
+    meta = _load_meta(project_id)
+    clips_dir = Path(meta.get("clips_dir", str(_project_dir(project_id) / "clips")))
+    if not clips_dir.exists():
+        return {"clips": []}
+
+    from src.config import SUPPORTED_EXTENSIONS
+    clip_files = sorted(
+        [f for f in clips_dir.iterdir() if f.suffix.lower() in SUPPORTED_EXTENSIONS],
+        key=lambda f: f.name,
+    )
+
+    thumbs = _thumbs_dir(project_id)
+    result = []
+    for f in clip_files:
+        thumb_file = thumbs / f"{f.stem}.jpg"
+        if not thumb_file.exists():
+            _extract_thumb(str(f), str(thumb_file))
+        result.append({
+            "filename": f.name,
+            "duration": _clip_duration(str(f)),
+            "size_mb": round(f.stat().st_size / (1024 * 1024), 1),
+            "thumbnail_url": f"/api/projects/{project_id}/thumbnails/{f.stem}.jpg",
+        })
+    return {"clips": result}
+
+
+@app.get("/api/projects/{project_id}/thumbnails/{filename}")
+def get_thumbnail(project_id: str, filename: str):
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    thumb = _thumbs_dir(project_id) / filename
+    if not thumb.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(str(thumb), media_type="image/jpeg")
+
+
+class SavePlanRequest(BaseModel):
+    cuts: list[dict]
+
+
+@app.post("/api/projects/{project_id}/plan")
+def save_plan(project_id: str, req: SavePlanRequest):
+    plan = _load_plan(project_id)
+    existing_by_id = {c["id"]: c for c in plan.get("cuts", [])}
+
+    updated = []
+    for incoming in req.cuts:
+        cut_id = incoming.get("id")
+        base = existing_by_id.get(cut_id, {})
+        updated.append({
+            **base,
+            "clips": incoming.get("clips", base.get("clips", [])),
+            "trim":  incoming.get("trim",  base.get("trim",  {})),
+            "transition": incoming.get("transition", base.get("transition", "cut")),
+        })
+
+    plan["cuts"] = updated
+    (_project_dir(project_id) / "plan.json").write_text(json.dumps(plan, indent=2))
+    # Return refreshed cuts so has_clips updates immediately
+    return {"ok": True, "cuts": _cuts_with_scripts(project_id)}
