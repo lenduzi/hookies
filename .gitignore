@@ -17,6 +17,7 @@ output/*.ass
 # Project clips and rendered output (large binary files)
 projects/*/clips/
 projects/*/output/
+projects/*/.thumbs/
 
 # Temp working files
 tmp/
