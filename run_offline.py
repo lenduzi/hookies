@@ -44,12 +44,12 @@ if not PROJECT_DIR.exists():
 meta      = json.loads((PROJECT_DIR / "meta.json").read_text())
 plan_data = json.loads((PROJECT_DIR / "plan.json").read_text())
 
-CLIPS_DIR   = PROJECT_DIR / "clips"
+CLIPS_DIR   = Path(meta.get("clips_dir", str(PROJECT_DIR / "clips")))
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
 OUTPUT_DIR  = PROJECT_DIR / "output"
 
-CLIPS_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print(f"\n🎬 Hookies — {meta['name']}")
 print("=" * 40)
@@ -58,6 +58,11 @@ print("=" * 40)
 drive_url = meta.get("drive_url", "").strip()
 
 if drive_url and not VO_ONLY:
+    # Drive projects always download into projects/{id}/clips/
+    drive_clips_dir = PROJECT_DIR / "clips"
+    drive_clips_dir.mkdir(exist_ok=True)
+    CLIPS_DIR = drive_clips_dir  # override so assembler uses the right folder
+
     if SKIP_DOWNLOAD:
         existing = list(CLIPS_DIR.iterdir())
         print(f"↩ Skipping download — {len(existing)} clips already in {CLIPS_DIR}")
