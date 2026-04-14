@@ -19,3 +19,8 @@ tmp/
 
 # macOS
 .DS_Store
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
