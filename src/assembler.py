@@ -120,7 +120,7 @@ def _concatenate_clips(segment_paths: list[str], output_path: str, transition: s
         )
 
 
-def assemble_cuts(plan: dict, clip_analyses: list[dict], output_dir: str | None = None) -> list[str]:
+def assemble_cuts(plan: dict, clip_analyses: list[dict], output_dir=None) -> list[str]:
     """
     Assemble all cuts from the plan. Returns list of output file paths.
     output_dir overrides the config OUTPUT_DIR (used for project-scoped output).
@@ -134,12 +134,16 @@ def assemble_cuts(plan: dict, clip_analyses: list[dict], output_dir: str | None 
     for cut in cuts:
         cut_name = cut["name"]
         transition = cut.get("transition", "cut")
-        clips_order = cut["clips"]
+        clips_order = cut.get("clips", [])
         trim_map = cut.get("trim", {})
 
+        if not clips_order:
+            print(f"\n  ⚠ Skipping {cut_name} — no clips configured")
+            continue
+
         print(f"\n  📹 Building: {cut_name}")
-        print(f"     Hook: {cut['hook']}")
-        print(f"     Vibe: {cut['vibe']}")
+        print(f"     Hook: {cut.get('hook', '')}")
+        print(f"     Vibe: {cut.get('vibe', '')}")
         print(f"     Clips: {' → '.join(clips_order)}")
 
         segment_paths = []

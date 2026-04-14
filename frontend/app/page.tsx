@@ -8,7 +8,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface Voice { id: string; label: string; description: string }
 interface ProjectMeta { id: string; name: string; brief: string; drive_url: string; cut_count: number; output_count: number }
-interface Cut { id: string; name: string; label: string; hook: string; vibe: string; script: string }
+interface Cut { id: string; name: string; label: string; hook: string; vibe: string; script: string; has_clips: boolean }
 interface OutputFile { name: string; size_mb: number; url: string }
 interface Variant { label: string; script: string }
 
@@ -29,9 +29,16 @@ export default function Home() {
   const [skipAssembly, setSkipAssembly] = useState(false);
   const [skipVo, setSkipVo] = useState(false);
   const [skipCaptions, setSkipCaptions] = useState(false);
+  const [skipDownload, setSkipDownload] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [generatingCut, setGeneratingCut] = useState<string | null>(null);
   const [variants, setVariants] = useState<{ cutId: string; items: Variant[] } | null>(null);
+  // Generate Angles
+  const [generatingAngles, setGeneratingAngles] = useState(false);
+  const [angleEmotion, setAngleEmotion] = useState("");
+  const [anglePlatform, setAnglePlatform] = useState("");
+  const [angleCta, setAngleCta] = useState("");
+  const [angleExtra, setAngleExtra] = useState("");
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -93,6 +100,20 @@ export default function Home() {
     setScriptsDirty(false);
   }
 
+  async function generateAngles() {
+    if (!activeId) return;
+    setGeneratingAngles(true);
+    try {
+      const d = await fetch(`${API}/api/projects/${activeId}/generate-angles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emotion: angleEmotion, platform: anglePlatform, cta: angleCta, extra: angleExtra }),
+      }).then(r => r.json());
+      if (d.cuts) { setCuts(d.cuts); setScriptsDirty(false); }
+    } catch { alert("Angle generation failed — check API key"); }
+    finally { setGeneratingAngles(false); }
+  }
+
   async function generateVariants(cutId: string) {
     if (!activeId) return;
     setGeneratingCut(cutId);
@@ -131,7 +152,7 @@ export default function Home() {
       const res = await fetch(`${API}/api/projects/${activeId}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voice, skip_assembly: skipAssembly, skip_vo: skipVo, skip_captions: skipCaptions }),
+        body: JSON.stringify({ voice, skip_assembly: skipAssembly, skip_vo: skipVo, skip_captions: skipCaptions, skip_download: skipDownload }),
         signal: ctrl.signal,
       });
 
@@ -285,6 +306,66 @@ export default function Home() {
               )}
             </div>
 
+            {/* Generate Angles */}
+            <Section
+              title="Generate Angles"
+              subtitle="Let Claude propose 3 distinct video concepts based on your project brief"
+              action={
+                <button onClick={generateAngles} disabled={generatingAngles} style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "6px 14px", borderRadius: 7, border: "none",
+                  background: generatingAngles ? "var(--bg-hover)" : "var(--accent)",
+                  color: generatingAngles ? "var(--text-secondary)" : "#0d0d0d",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                }}>
+                  {generatingAngles ? <><Spinner size={11} /> Generating…</> : "✦ Generate angles"}
+                </button>
+              }
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  {
+                    label: "Target emotion",
+                    opts: ["FOMO", "Inspiration", "Curiosity", "Trust", "Humour"],
+                    val: angleEmotion, set: setAngleEmotion,
+                  },
+                  {
+                    label: "Platform",
+                    opts: ["TikTok / Reels", "YouTube Shorts", "Both"],
+                    val: anglePlatform, set: setAnglePlatform,
+                  },
+                  {
+                    label: "CTA style",
+                    opts: ["Link in bio", "DM me", "Comment below", "Save this"],
+                    val: angleCta, set: setAngleCta,
+                  },
+                ].map(row => (
+                  <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 120, fontSize: 12, color: "var(--text-muted)", flexShrink: 0 }}>{row.label}</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {row.opts.map(opt => (
+                        <button key={opt} onClick={() => row.set(row.val === opt ? "" : opt)} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 12, cursor: "pointer",
+                          background: row.val === opt ? "var(--accent-dim)" : "var(--bg-card)",
+                          border: `1px solid ${row.val === opt ? "var(--accent-border)" : "var(--border)"}`,
+                          color: row.val === opt ? "var(--accent)" : "var(--text-secondary)",
+                        }}>{opt}</button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 120, fontSize: 12, color: "var(--text-muted)", flexShrink: 0 }}>Extra notes</div>
+                  <input
+                    value={angleExtra}
+                    onChange={e => setAngleExtra(e.target.value)}
+                    placeholder="Optional — e.g. 'focus on the blowtorch moment'"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                </div>
+              </div>
+            </Section>
+
             {/* Voice */}
             <Section title="Voice" subtitle="OpenAI TTS voice for narration">
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -402,6 +483,7 @@ export default function Home() {
             <Section title="Pipeline Options" subtitle="Skip steps to speed up iteration">
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {[
+                  { label: "Skip download", desc: "Reuse cached clips", val: skipDownload, set: setSkipDownload },
                   { label: "Skip assembly", desc: "Reuse existing cuts", val: skipAssembly, set: setSkipAssembly },
                   { label: "Skip voiceover", desc: "No TTS", val: skipVo, set: setSkipVo },
                   { label: "Skip captions", desc: "No burn-in", val: skipCaptions, set: setSkipCaptions },
@@ -420,18 +502,35 @@ export default function Home() {
             </Section>
 
             {/* Run */}
-            <div style={{ margin: "4px 0 28px" }}>
-              <button onClick={run} style={{
-                height: 42, padding: "0 28px", borderRadius: 8, border: "none",
-                cursor: "pointer", fontSize: 14, fontWeight: 600,
-                background: running ? "var(--bg-hover)" : "var(--accent)",
-                color: running ? "var(--text-secondary)" : "#0d0d0d",
-                display: "flex", alignItems: "center", gap: 8,
-                transition: "background 0.2s",
-              }}>
-                {running ? <><Spinner /> Stop pipeline</> : "Generate cuts"}
-              </button>
-            </div>
+            {(() => {
+              const hasClips = cuts.some(c => c.has_clips);
+              return (
+                <div style={{ margin: "4px 0 28px" }}>
+                  {!hasClips && !skipAssembly ? (
+                    <div style={{
+                      padding: "12px 16px", borderRadius: 8,
+                      background: "var(--bg-card)", border: "1px solid var(--border)",
+                      fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6,
+                    }}>
+                      <span style={{ color: "var(--accent)", fontWeight: 600 }}>No clips configured</span>
+                      {" "}— add footage to your plan before running assembly.
+                      Enable <strong style={{ color: "var(--text-primary)" }}>Skip assembly</strong> above to only regenerate voiceovers for existing output files.
+                    </div>
+                  ) : (
+                    <button onClick={run} style={{
+                      height: 42, padding: "0 28px", borderRadius: 8, border: "none",
+                      cursor: "pointer", fontSize: 14, fontWeight: 600,
+                      background: running ? "var(--bg-hover)" : "var(--accent)",
+                      color: running ? "var(--text-secondary)" : "#0d0d0d",
+                      display: "flex", alignItems: "center", gap: 8,
+                      transition: "background 0.2s",
+                    }}>
+                      {running ? <><Spinner /> Stop pipeline</> : "Generate cuts"}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Log */}
             {logs.length > 0 && (

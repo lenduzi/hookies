@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Offline assembler — project-aware pipeline runner.
+Project-aware pipeline runner.
 Usage:
   .venv/bin/python run_offline.py --project turmbar-hamburg
+  .venv/bin/python run_offline.py --project fairgrapes-wein --skip-download
   .venv/bin/python run_offline.py --project turmbar-hamburg --vo-only
   .venv/bin/python run_offline.py --project turmbar-hamburg --skip-vo
   .venv/bin/python run_offline.py --project turmbar-hamburg --skip-captions
@@ -21,39 +22,58 @@ from src.voiceover import generate_voiceover, mix_voiceover
 from src.captioner import transcribe_audio, burn_captions
 
 # ── Args ──────────────────────────────────────────────────────────────────────
-def _arg(flag: str) -> str | None:
+def _arg(flag):
     try:
         return sys.argv[sys.argv.index(flag) + 1]
     except (ValueError, IndexError):
         return None
 
-PROJECT_ID  = _arg("--project") or "turmbar-hamburg"
-VO_ONLY     = "--vo-only"       in sys.argv
-SKIP_VO     = "--skip-vo"       in sys.argv
-CAPTIONS_ONLY = "--captions-only" in sys.argv
-SKIP_CAPTIONS = "--skip-captions" in sys.argv
+PROJECT_ID    = _arg("--project") or "turmbar-hamburg"
+VO_ONLY       = "--vo-only"        in sys.argv
+SKIP_VO       = "--skip-vo"        in sys.argv
+SKIP_CAPTIONS = "--skip-captions"  in sys.argv
+SKIP_DOWNLOAD = "--skip-download"  in sys.argv
 
 # ── Project paths ─────────────────────────────────────────────────────────────
-PROJECTS_DIR = Path("projects")
-PROJECT_DIR  = PROJECTS_DIR / PROJECT_ID
+PROJECT_DIR = Path("projects") / PROJECT_ID
 
 if not PROJECT_DIR.exists():
     print(f"❌ Project '{PROJECT_ID}' not found in ./projects/")
     sys.exit(1)
 
-meta       = json.loads((PROJECT_DIR / "meta.json").read_text())
-plan_data  = json.loads((PROJECT_DIR / "plan.json").read_text())
+meta      = json.loads((PROJECT_DIR / "meta.json").read_text())
+plan_data = json.loads((PROJECT_DIR / "plan.json").read_text())
 
-CLIPS_DIR  = Path(meta.get("clips_dir", "./tmp"))
+CLIPS_DIR   = PROJECT_DIR / "clips"
 SCRIPTS_DIR = PROJECT_DIR / "scripts"
 OUTPUT_DIR  = PROJECT_DIR / "output"
 
+CLIPS_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+print(f"\n🎬 Hookies — {meta['name']}")
+print("=" * 40)
+
+# ── Step 0: Download from Google Drive if configured ─────────────────────────
+drive_url = meta.get("drive_url", "").strip()
+
+if drive_url and not VO_ONLY:
+    if SKIP_DOWNLOAD:
+        existing = list(CLIPS_DIR.iterdir())
+        print(f"↩ Skipping download — {len(existing)} clips already in {CLIPS_DIR}")
+    else:
+        print(f"☁️  Downloading clips from Google Drive...")
+        try:
+            from src.drive_client import download_folder
+            download_folder(drive_url, dest_dir=str(CLIPS_DIR))
+        except Exception as e:
+            print(f"❌ Drive download failed: {e}")
+            sys.exit(1)
 
 # ── Build clip_analyses from plan ─────────────────────────────────────────────
 seen = {}
 for cut in plan_data["cuts"]:
-    for filename in cut["clips"]:
+    for filename in cut.get("clips", []):
         if filename not in seen:
             seen[filename] = {
                 "filename": filename,
@@ -63,33 +83,31 @@ for cut in plan_data["cuts"]:
 clip_analyses = list(seen.values())
 
 # ── Step 1: Assemble ──────────────────────────────────────────────────────────
-print(f"\n🎬 Hookies — {meta['name']}")
-print("=" * 40)
-
 if not VO_ONLY:
-    print(f"Assembling cuts from plan.json...\n")
+    print(f"\nAssembling cuts from plan.json...")
     output_paths = assemble_cuts(plan_data, clip_analyses, output_dir=str(OUTPUT_DIR))
 else:
     output_paths = sorted([
         str(p) for p in OUTPUT_DIR.glob("cut_*.mp4")
         if "_vo" not in p.name
     ])
-    print(f"↩ Skipping assembly — using {len(output_paths)} existing cuts\n")
+    print(f"↩ Skipping assembly — using {len(output_paths)} existing cuts")
 
 if not output_paths:
-    print("❌ No assembled cuts found. Run without --vo-only first.")
+    if not VO_ONLY:
+        print("❌ No cuts assembled — check that your plan.json has clips configured.")
+    else:
+        print("❌ No assembled cuts found. Run without --vo-only first.")
     sys.exit(1)
 
 # ── Step 2: Voiceover ─────────────────────────────────────────────────────────
 if not SKIP_VO:
     print("\n🎙 Generating voiceovers...")
-
     script_map = {p.stem: p for p in SCRIPTS_DIR.glob("*.txt")}
     final_paths = []
 
     for video_path in output_paths:
-        cut_name = Path(video_path).stem  # e.g. cut_1_angle_1
-
+        cut_name = Path(video_path).stem
         script_file = script_map.get(cut_name)
         if not script_file:
             print(f"  ⚠ No script for {cut_name} — skipping VO")
@@ -113,8 +131,8 @@ else:
 # ── Step 3: Captions ──────────────────────────────────────────────────────────
 if not SKIP_CAPTIONS:
     print("\n📝 Generating captions with Whisper...")
-
     captioned_paths = []
+
     for video_path in final_paths:
         stem = Path(video_path).stem
         vo_mp3 = str(OUTPUT_DIR / f"{stem.replace('_vo', '')}_vo.mp3")

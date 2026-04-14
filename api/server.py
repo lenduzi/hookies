@@ -80,11 +80,18 @@ class GenerateRequest(BaseModel):
     cut_id: str          # e.g. "cut_1"
     tone_hint: str = ""  # optional extra nudge
 
+class GenerateAnglesRequest(BaseModel):
+    emotion: str = ""    # e.g. "FOMO", "Inspiration"
+    platform: str = ""   # e.g. "TikTok / Reels"
+    cta: str = ""        # e.g. "Link in bio"
+    extra: str = ""      # free-text extra notes
+
 class RunRequest(BaseModel):
     voice: str = "nova"
     skip_assembly: bool = False
     skip_vo: bool = False
     skip_captions: bool = False
+    skip_download: bool = False
 
 
 # ── Project helpers ───────────────────────────────────────────────────────────
@@ -143,6 +150,7 @@ def _cuts_with_scripts(project_id: str) -> list[dict]:
             "label": cut.get("label", cut["name"]),
             "hook": cut.get("hook", ""),
             "vibe": cut.get("vibe", ""),
+            "has_clips": len(cut.get("clips", [])) > 0,
             "script": _read_script(project_id, f"{cut['id']}_{cut['name']}"),
         }
         for cut in cuts
@@ -312,6 +320,126 @@ def generate_scripts(project_id: str, req: GenerateRequest):
     return result  # {"variants": [...]}
 
 
+ANGLES_PROMPT = """You are a social media video strategist and UGC scriptwriter specialising in Instagram Reels and TikTok.
+
+PROJECT BRIEF:
+{brief}
+
+PARAMETERS:
+- Target emotion: {emotion}
+- Platform: {platform}
+- CTA style: {cta}
+{extra_line}
+
+Generate exactly 3 distinct video angle concepts for this project. Each angle should have a different hook strategy, emotional approach, and narrative structure — they should feel like genuinely different videos, not variations on the same idea.
+
+For each angle provide:
+- name: a short slug (snake_case, 3-5 words)
+- label: a human-readable title (e.g. "Cut 1 — The Sceptic's Journey")
+- hook: one sentence describing the visual/verbal opening hook
+- vibe: 1-2 sentence tone description
+- script: a ready-to-use voiceover script (40-60 words, conversational, authentic UGC tone, ends with a soft CTA)
+
+Return ONLY valid JSON, no markdown fences:
+{{
+  "cuts": [
+    {{
+      "id": "cut_1",
+      "name": "slug_name_here",
+      "label": "Cut 1 — Human Title",
+      "hook": "Opening hook description",
+      "vibe": "Tone and energy description",
+      "script": "Full voiceover script..."
+    }},
+    {{
+      "id": "cut_2",
+      "name": "...",
+      "label": "Cut 2 — ...",
+      "hook": "...",
+      "vibe": "...",
+      "script": "..."
+    }},
+    {{
+      "id": "cut_3",
+      "name": "...",
+      "label": "Cut 3 — ...",
+      "hook": "...",
+      "vibe": "...",
+      "script": "..."
+    }}
+  ]
+}}"""
+
+@app.post("/api/projects/{project_id}/generate-angles")
+def generate_angles(project_id: str, req: GenerateAnglesRequest):
+    import anthropic
+
+    meta = _load_meta(project_id)
+    brief = meta.get("brief", "")
+    if not brief:
+        raise HTTPException(status_code=400, detail="Project has no brief — add one before generating angles")
+
+    extra_line = f"- Extra notes: {req.extra}" if req.extra else ""
+
+    prompt = ANGLES_PROMPT.format(
+        brief=brief,
+        emotion=req.emotion or "any",
+        platform=req.platform or "TikTok / Instagram Reels",
+        cta=req.cta or "Link in bio",
+        extra_line=extra_line,
+    )
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = message.content[0].text.strip()
+    raw = re.sub(r"^```[a-z]*\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw)
+
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=f"Claude returned non-JSON: {raw[:300]}")
+
+    cuts = result.get("cuts", [])
+    if len(cuts) != 3:
+        raise HTTPException(status_code=500, detail=f"Expected 3 cuts, got {len(cuts)}")
+
+    # Load existing plan to preserve clips/trim data
+    plan = _load_plan(project_id)
+    existing_by_id = {c["id"]: c for c in plan.get("cuts", [])}
+
+    new_cuts = []
+    for cut in cuts:
+        existing = existing_by_id.get(cut["id"], {})
+        new_cuts.append({
+            "id": cut["id"],
+            "name": cut["name"],
+            "label": cut["label"],
+            "hook": cut["hook"],
+            "vibe": cut["vibe"],
+            "clips": existing.get("clips", []),
+            "trim": existing.get("trim", {}),
+            "transition": existing.get("transition", "cut"),
+            "target_duration": existing.get("target_duration", 30),
+        })
+
+    # Save updated plan
+    plan["cuts"] = new_cuts
+    (_project_dir(project_id) / "plan.json").write_text(json.dumps(plan, indent=2))
+
+    # Save generated scripts
+    for cut in cuts:
+        filename = f"{cut['id']}_{cut['name']}.txt"
+        (_scripts_dir(project_id) / filename).write_text(cut["script"].strip())
+
+    return {"cuts": _cuts_with_scripts(project_id)}
+
+
 # ── Routes: pipeline ──────────────────────────────────────────────────────────
 
 @app.post("/api/projects/{project_id}/run")
@@ -319,7 +447,7 @@ async def run_pipeline(project_id: str, req: RunRequest, request: Request):
     _load_meta(project_id)  # 404 guard
 
     async def event_stream():
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue()
 
         def emit(event: str, data: dict):
             payload = json.dumps({"event": event, **data})
@@ -334,6 +462,8 @@ async def run_pipeline(project_id: str, req: RunRequest, request: Request):
                     cmd.append("--skip-vo")
                 if req.skip_captions:
                     cmd.append("--skip-captions")
+                if req.skip_download:
+                    cmd.append("--skip-download")
 
                 env = os.environ.copy()
                 env["OPENAI_TTS_VOICE"] = req.voice

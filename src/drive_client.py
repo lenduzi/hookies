@@ -48,13 +48,17 @@ def _build_service():
     return build("drive", "v3", credentials=creds)
 
 
-def download_folder(folder_url: str) -> list[str]:
+def download_folder(folder_url: str, dest_dir: str = None) -> list[str]:
     """
     Download all video files from a Google Drive folder.
+    dest_dir overrides the default TEMP_DIR (use project clips/ dir).
     Returns list of local file paths.
     """
     from googleapiclient.http import MediaIoBaseDownload
     import io
+
+    download_to = dest_dir or TEMP_DIR
+    os.makedirs(download_to, exist_ok=True)
 
     folder_id = _get_folder_id(folder_url)
     service = _build_service()
@@ -75,11 +79,11 @@ def download_folder(folder_url: str) -> list[str]:
     if not video_files:
         raise ValueError(f"No video files found in Drive folder. Supported formats: {SUPPORTED_EXTENSIONS}")
 
-    print(f"Found {len(video_files)} video files. Downloading...")
+    print(f"Found {len(video_files)} video files. Downloading to {download_to}...")
 
     local_paths = []
     for file in tqdm(video_files, desc="Downloading clips"):
-        local_path = os.path.join(TEMP_DIR, file["name"])
+        local_path = os.path.join(download_to, file["name"])
 
         if os.path.exists(local_path):
             print(f"  ↩ Skipping {file['name']} (already downloaded)")
@@ -95,7 +99,7 @@ def download_folder(folder_url: str) -> list[str]:
 
         local_paths.append(local_path)
 
-    print(f"✅ Downloaded {len(local_paths)} clips to {TEMP_DIR}")
+    print(f"✅ Downloaded {len(local_paths)} clips to {download_to}")
     return local_paths
 
 
