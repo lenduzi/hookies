@@ -1,0 +1,37 @@
+{
+  "cuts": [
+    {
+      "id": "cut_1",
+      "name": "angle_1",
+      "label": "Cut 1",
+      "hook": "",
+      "vibe": "",
+      "clips": [],
+      "trim": {},
+      "transition": "cut",
+      "target_duration": 30
+    },
+    {
+      "id": "cut_2",
+      "name": "angle_2",
+      "label": "Cut 2",
+      "hook": "",
+      "vibe": "",
+      "clips": [],
+      "trim": {},
+      "transition": "cut",
+      "target_duration": 30
+    },
+    {
+      "id": "cut_3",
+      "name": "angle_3",
+      "label": "Cut 3",
+      "hook": "",
+      "vibe": "",
+      "clips": [],
+      "trim": {},
+      "transition": "cut",
+      "target_duration": 30
+    }
+  ]
+}

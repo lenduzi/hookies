@@ -14,6 +14,10 @@ output/*.mp4
 output/*.mp3
 output/*.ass
 
+# Project clips and rendered output (large binary files)
+projects/*/clips/
+projects/*/output/
+
 # Temp working files
 tmp/
 
