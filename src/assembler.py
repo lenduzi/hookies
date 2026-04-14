@@ -120,10 +120,12 @@ def _concatenate_clips(segment_paths: list[str], output_path: str, transition: s
         )
 
 
-def assemble_cuts(plan: dict, clip_analyses: list[dict]) -> list[str]:
+def assemble_cuts(plan: dict, clip_analyses: list[dict], output_dir: str | None = None) -> list[str]:
     """
     Assemble all cuts from the plan. Returns list of output file paths.
+    output_dir overrides the config OUTPUT_DIR (used for project-scoped output).
     """
+    out_dir = output_dir or OUTPUT_DIR
     output_paths = []
     cuts = plan.get("cuts", [])
 
@@ -164,7 +166,7 @@ def assemble_cuts(plan: dict, clip_analyses: list[dict]) -> list[str]:
             segment_paths.append(seg_path)
 
         output_filename = f"{cut['id']}_{cut_name}.mp4"
-        output_path = os.path.join(OUTPUT_DIR, output_filename)
+        output_path = os.path.join(out_dir, output_filename)
 
         _concatenate_clips(segment_paths, output_path, transition)
 
