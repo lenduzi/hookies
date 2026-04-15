@@ -32,11 +32,12 @@ export default function Home() {
   const [planDirty,   setPlanDirty]   = useState(false);
   const [savingPlan,  setSavingPlan]  = useState(false);
   const [loadingClips,setLoadingClips]= useState(false);
-  // AI Edit Plan
+  // AI Edit Plan + Drive sync
   const [aiPlanning,  setAiPlanning]  = useState(false);
   const [aiPlanLogs,  setAiPlanLogs]  = useState<string[]>([]);
+  const [syncingDrive, setSyncingDrive] = useState(false);
   // pipeline
-  const [voice,          setVoice]          = useState("nova");
+  const [voice,          setVoice]          = useState("FGY2WhTYpPnrIDTdsKH5"); // Laura (ElevenLabs default)
   const [skipAssembly,   setSkipAssembly]   = useState(false);
   const [skipVo,         setSkipVo]         = useState(false);
   const [skipCaptions,   setSkipCaptions]   = useState(false);
@@ -140,6 +141,44 @@ export default function Home() {
     if (d.cuts) setCuts(d.cuts);
     setSavingPlan(false); setPlanDirty(false);
     loadProjects();
+  }
+
+  async function runSyncDrive() {
+    if (!activeId || syncingDrive) return;
+    setSyncingDrive(true);
+    setAiPlanLogs(["Connecting to Google Drive…"]);
+    try {
+      const res = await fetch(`${API}/api/projects/${activeId}/sync-drive`, {method:"POST"});
+      if (!res.body) throw new Error("No stream");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream:true});
+        const parts = buf.split("\n\n");
+        buf = parts.pop() || "";
+        for (const part of parts) {
+          const line = part.replace(/^data: /, "").trim();
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.event === "progress") setAiPlanLogs(prev=>[...prev, msg.message]);
+            if (msg.event === "done") {
+              setAiPlanLogs(prev=>[...prev, msg.message]);
+              await loadClips(activeId);
+            }
+            if (msg.event === "error") setAiPlanLogs(prev=>[...prev, `Error: ${msg.message}`]);
+          } catch {}
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAiPlanLogs(prev=>[...prev, `Failed: ${msg}`]);
+    } finally {
+      setSyncingDrive(false);
+    }
   }
 
   async function runAiPlan() {
@@ -364,7 +403,12 @@ export default function Home() {
             <Section title="Clip Plan" subtitle="Assign footage to each cut and set trim points"
               action={
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  <button onClick={runAiPlan} disabled={aiPlanning} style={actionBtnStyle}>
+                  {projects.find(p=>p.id===activeId)?.drive_url && (
+                    <button onClick={runSyncDrive} disabled={syncingDrive||aiPlanning} style={actionBtnStyle}>
+                      {syncingDrive ? "Syncing…" : "⬇ Sync Drive"}
+                    </button>
+                  )}
+                  <button onClick={runAiPlan} disabled={aiPlanning||syncingDrive} style={actionBtnStyle}>
                     {aiPlanning ? "Planning…" : "✦ AI Edit Plan"}
                   </button>
                   {planDirty && <button onClick={savePlan} disabled={savingPlan} style={actionBtnStyle}>{savingPlan?"Saving…":"Save plan"}</button>}
@@ -376,6 +420,7 @@ export default function Home() {
                 planCuts={planCuts}
                 clips={clips}
                 loadingClips={loadingClips}
+                driveUrl={projects.find(p=>p.id===activeId)?.drive_url}
                 onAddClip={addClipToCut}
                 onRemoveClip={removeClipFromCut}
                 onMoveClip={moveClip}
@@ -539,13 +584,14 @@ export default function Home() {
 // ── ClipPlanEditor ────────────────────────────────────────────────────────────
 
 function ClipPlanEditor({
-  projectId, planCuts, clips, loadingClips,
+  projectId, planCuts, clips, loadingClips, driveUrl,
   onAddClip, onRemoveClip, onMoveClip, onUpdateTrim, onTransitionChange,
 }: {
   projectId: string;
   planCuts: PlanCut[];
   clips: ClipInfo[];
   loadingClips: boolean;
+  driveUrl?: string;
   onAddClip: (cutId: string, filename: string) => void;
   onRemoveClip: (cutId: string, filename: string) => void;
   onMoveClip: (cutId: string, from: number, to: number) => void;
@@ -659,9 +705,12 @@ function ClipPlanEditor({
               Library {loadingClips && <span style={{fontWeight:400,color:"var(--text-muted)"}}>(loading…)</span>}
             </div>
             {!loadingClips && clips.length===0 && (
-              <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.6}}>
+              <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.8}}>
                 No clips found.<br/>
-                Add footage to <code style={{fontSize:11}}>projects/{projectId}/clips/</code> or connect a Drive URL.
+                {driveUrl
+                  ? <span>Click <strong style={{color:"var(--text-secondary)"}}>⬇ Sync Drive</strong> above to download footage.</span>
+                  : <span>Add footage to <code style={{fontSize:11}}>projects/{projectId}/clips/</code>.</span>
+                }
               </div>
             )}
             <div style={{display:"flex",flexDirection:"column",gap:4}}>

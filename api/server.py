@@ -90,7 +90,7 @@ class GenerateAnglesRequest(BaseModel):
     extra: str = ""      # free-text extra notes
 
 class RunRequest(BaseModel):
-    voice: str = "nova"
+    voice: str = "FGY2WhTYpPnrIDTdsKH5"  # Laura (ElevenLabs default)
     skip_assembly: bool = False
     skip_vo: bool = False
     skip_captions: bool = False
@@ -681,6 +681,66 @@ Rules:
 - The `id` values for the {n} cuts must be exactly: {cut_ids}
 - Return ONLY the JSON object, no preamble or explanation
 """
+
+
+@app.post("/api/projects/{project_id}/sync-drive")
+async def sync_drive(project_id: str, request: Request):
+    """SSE endpoint: download clips from the project's Google Drive URL into clips_dir."""
+    meta = _load_meta(project_id)
+    drive_url = meta.get("drive_url", "").strip()
+    if not drive_url:
+        raise HTTPException(status_code=400, detail="No Drive URL configured for this project")
+
+    dest_dir = str(_project_dir(project_id) / "clips")
+
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(event: str, data: dict):
+            payload = json.dumps({"event": event, **data})
+            queue.put_nowait(f"data: {payload}\n\n")
+
+        async def run():
+            try:
+                emit("progress", {"message": "Connecting to Google Drive…"})
+                await asyncio.sleep(0)
+
+                import pathlib
+                pathlib.Path(dest_dir).mkdir(parents=True, exist_ok=True)
+
+                from src.drive_client import download_folder
+                loop = asyncio.get_event_loop()
+                paths = await loop.run_in_executor(None, download_folder, drive_url, dest_dir)
+
+                # Update meta.json clips_dir to point at the downloaded clips
+                meta["clips_dir"] = dest_dir
+                (_project_dir(project_id) / "meta.json").write_text(json.dumps(meta, indent=2))
+
+                emit("done", {"message": f"Downloaded {len(paths)} clips.", "count": len(paths)})
+            except Exception as exc:
+                emit("error", {"message": str(exc)})
+            finally:
+                queue.put_nowait(None)
+
+        asyncio.create_task(run())
+
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=300)
+            except asyncio.TimeoutError:
+                yield "data: {\"event\":\"ping\"}\n\n"
+                continue
+            if item is None:
+                break
+            yield item
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/projects/{project_id}/analyze-and-plan")
