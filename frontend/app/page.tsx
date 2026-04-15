@@ -32,6 +32,9 @@ export default function Home() {
   const [planDirty,   setPlanDirty]   = useState(false);
   const [savingPlan,  setSavingPlan]  = useState(false);
   const [loadingClips,setLoadingClips]= useState(false);
+  // AI Edit Plan
+  const [aiPlanning,  setAiPlanning]  = useState(false);
+  const [aiPlanLogs,  setAiPlanLogs]  = useState<string[]>([]);
   // pipeline
   const [voice,          setVoice]          = useState("nova");
   const [skipAssembly,   setSkipAssembly]   = useState(false);
@@ -137,6 +140,44 @@ export default function Home() {
     if (d.cuts) setCuts(d.cuts);
     setSavingPlan(false); setPlanDirty(false);
     loadProjects();
+  }
+
+  async function runAiPlan() {
+    if (!activeId || aiPlanning) return;
+    setAiPlanning(true);
+    setAiPlanLogs(["Starting AI analysis…"]);
+    try {
+      const res = await fetch(`${API}/api/projects/${activeId}/analyze-and-plan`, {method:"POST"});
+      if (!res.body) throw new Error("No stream");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream:true});
+        const parts = buf.split("\n\n");
+        buf = parts.pop() || "";
+        for (const part of parts) {
+          const line = part.replace(/^data: /, "").trim();
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.event === "progress") setAiPlanLogs(prev=>[...prev, msg.message]);
+            if (msg.event === "done") {
+              setAiPlanLogs(prev=>[...prev, "Done! Plan updated."]);
+              await loadProject(activeId);
+            }
+            if (msg.event === "error") setAiPlanLogs(prev=>[...prev, `Error: ${msg.message}`]);
+          } catch {}
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAiPlanLogs(prev=>[...prev, `Failed: ${msg}`]);
+    } finally {
+      setAiPlanning(false);
+    }
   }
 
   function updatePlanCut(cutId: string, updater: (c: PlanCut) => PlanCut) {
@@ -321,7 +362,14 @@ export default function Home() {
 
             {/* Clip Plan Editor */}
             <Section title="Clip Plan" subtitle="Assign footage to each cut and set trim points"
-              action={planDirty ? <button onClick={savePlan} disabled={savingPlan} style={actionBtnStyle}>{savingPlan?"Saving…":"Save plan"}</button> : null}
+              action={
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <button onClick={runAiPlan} disabled={aiPlanning} style={actionBtnStyle}>
+                    {aiPlanning ? "Planning…" : "✦ AI Edit Plan"}
+                  </button>
+                  {planDirty && <button onClick={savePlan} disabled={savingPlan} style={actionBtnStyle}>{savingPlan?"Saving…":"Save plan"}</button>}
+                </div>
+              }
             >
               <ClipPlanEditor
                 projectId={activeId!}
@@ -334,6 +382,13 @@ export default function Home() {
                 onUpdateTrim={updateTrim}
                 onTransitionChange={(cutId,t)=>updatePlanCut(cutId,c=>({...c,transition:t}))}
               />
+              {aiPlanLogs.length > 0 && (
+                <div style={{marginTop:10,padding:"10px 14px",background:"var(--bg-surface)",border:"1px solid var(--border)",borderRadius:8,fontFamily:"monospace",fontSize:11,color:"var(--text-secondary)",maxHeight:160,overflowY:"auto"}}>
+                  {aiPlanLogs.map((l,i)=>(
+                    <div key={i} style={{padding:"1px 0",color: l.startsWith("Error") ? "var(--error,#f87171)" : l.startsWith("Done") ? "var(--accent)" : "inherit"}}>{l}</div>
+                  ))}
+                </div>
+              )}
             </Section>
 
             {/* Voice */}

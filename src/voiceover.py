@@ -1,48 +1,50 @@
 """
-Voiceover — generates a spoken MP3 from a script using OpenAI TTS.
+Voiceover — generates a spoken MP3 from a script using ElevenLabs TTS.
 """
 
 import os
 from pathlib import Path
 
 
-# nova = warm, natural, good for UGC. Options: alloy, echo, fable, onyx, nova, shimmer
-DEFAULT_VOICE = "nova"
-DEFAULT_MODEL = "tts-1-hd"  # tts-1 is faster/cheaper, tts-1-hd is higher quality
+# Default voice: Laura — warm, natural, great for UGC
+DEFAULT_VOICE_ID = "FGY2WhTYpPnrIDTdsKH5"
+DEFAULT_MODEL    = "eleven_turbo_v2_5"   # fast, high quality, low latency
 
 
 def generate_voiceover(script: str, output_path: str) -> str:
     """
-    Generate a voiceover MP3 from a script string using OpenAI TTS.
+    Generate a voiceover MP3 from a script string using ElevenLabs TTS.
     Returns the path to the saved MP3.
     """
-    from openai import OpenAI
+    from elevenlabs.client import ElevenLabs
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("ELEVENLABS_API_KEY")
     if not api_key:
-        raise EnvironmentError("OPENAI_API_KEY is not set in .env")
+        raise EnvironmentError("ELEVENLABS_API_KEY is not set in .env")
 
-    voice = os.getenv("OPENAI_TTS_VOICE", DEFAULT_VOICE)
-    model = os.getenv("OPENAI_TTS_MODEL", DEFAULT_MODEL)
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_VOICE_ID)
+    model    = os.getenv("ELEVENLABS_MODEL", DEFAULT_MODEL)
 
-    client = OpenAI(api_key=api_key)
+    client = ElevenLabs(api_key=api_key)
 
-    response = client.audio.speech.create(
-        model=model,
-        voice=voice,
-        input=script.strip(),
-        response_format="mp3",
+    audio = client.text_to_speech.convert(
+        text=script.strip(),
+        voice_id=voice_id,
+        model_id=model,
+        output_format="mp3_44100_128",
     )
 
-    response.stream_to_file(output_path)
+    with open(output_path, "wb") as f:
+        for chunk in audio:
+            f.write(chunk)
+
     return output_path
 
 
 def mix_voiceover(video_path: str, audio_path: str, output_path: str) -> str:
     """
     Mix a voiceover MP3 onto a silent video.
-    The output duration matches the longer of video or audio (-shortest behaviour
-    can be controlled via the flag below).
+    The output duration matches the shorter of video or audio.
     Returns path to the output file.
     """
     import subprocess
@@ -57,7 +59,7 @@ def mix_voiceover(video_path: str, audio_path: str, output_path: str) -> str:
             "-b:a", "192k",
             "-map", "0:v",
             "-map", "1:a",
-            "-shortest",   # stop at the end of the shorter stream
+            "-shortest",
             output_path,
         ],
         capture_output=True,

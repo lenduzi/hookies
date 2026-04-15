@@ -53,12 +53,15 @@ app.add_middleware(
 )
 
 VOICES = [
-    {"id": "alloy",   "label": "Alloy",   "description": "Clear, neutral"},
-    {"id": "echo",    "label": "Echo",    "description": "Smooth, male"},
-    {"id": "fable",   "label": "Fable",   "description": "Warm, storytelling"},
-    {"id": "onyx",    "label": "Onyx",    "description": "Deep, authoritative"},
-    {"id": "nova",    "label": "Nova",    "description": "Warm, natural — great for UGC"},
-    {"id": "shimmer", "label": "Shimmer", "description": "Bright, upbeat"},
+    {"id": "FGY2WhTYpPnrIDTdsKH5", "label": "Laura",   "description": "Warm, natural — great for UGC"},
+    {"id": "Xb7hH8MSUJpSbSDYk0k2", "label": "Alice",   "description": "Confident, expressive, female"},
+    {"id": "pFZP5JQG7iQjIQuC4Bku", "label": "Lily",    "description": "Warm, conversational, female"},
+    {"id": "CwhRBWXzGAHq8TQ4Fs17", "label": "Roger",   "description": "Confident, American male"},
+    {"id": "JBFqnCBsd6RMkjVDRZzb", "label": "George",  "description": "Deep, warm, British male"},
+    {"id": "IKne3meq5aSn9XLyUdCD", "label": "Charlie", "description": "Natural, Australian male"},
+    {"id": "onwK4e9ZLuTAKqWW03F9", "label": "Daniel",  "description": "Authoritative, British male"},
+    {"id": "N2lVS1w4EtoT3dr4eOWO", "label": "Callum",  "description": "Intense, male"},
+    {"id": "bIHbv24MWmeRgasZH58o", "label": "Will",    "description": "Friendly, conversational male"},
 ]
 
 
@@ -466,7 +469,7 @@ async def run_pipeline(project_id: str, req: RunRequest, request: Request):
                     cmd.append("--skip-download")
 
                 env = os.environ.copy()
-                env["OPENAI_TTS_VOICE"] = req.voice
+                env["ELEVENLABS_VOICE_ID"] = req.voice
 
                 emit("start", {"message": f"Starting pipeline for {project_id}..."})
 
@@ -603,6 +606,266 @@ def get_thumbnail(project_id: str, filename: str):
 
 class SavePlanRequest(BaseModel):
     cuts: list[dict]
+
+
+# ── Routes: AI Edit Plan ──────────────────────────────────────────────────────
+
+def _build_plan_prompt(clip_analyses: list[dict], cuts: list[dict]) -> str:
+    """Build a dynamic planning prompt seeded with the project's existing angle briefs."""
+    cuts_section = ""
+    for i, cut in enumerate(cuts, 1):
+        label = cut.get("label", cut.get("name", f"Cut {i}"))
+        hook = cut.get("hook", "")
+        vibe = cut.get("vibe", "")
+        transition = cut.get("transition", "cut")
+        cuts_section += f"""
+### Cut {i} — "{label}"
+- **Hook concept:** {hook or "Select the most compelling opener"}
+- **Vibe:** {vibe or "Energetic, authentic, social-media ready"}
+- **Transition:** {transition}
+"""
+
+    n = len(cuts)
+    cut_ids = ", ".join(f'"{c["id"]}"' for c in cuts)
+    example_cut = cuts[0] if cuts else {"id": "cut_1", "name": "angle_1"}
+    example_clips = []
+    if clip_analyses:
+        example_clips = [clip_analyses[0]["filename"]]
+        if len(clip_analyses) > 1:
+            example_clips.append(clip_analyses[1]["filename"])
+
+    return f"""You are an expert UGC video editor specialising in viral social media content for venues, restaurants, and nightlife.
+
+You have analysed a folder of raw clips. Below is a JSON array of clip analysis results. Your job is to plan exactly **{n} distinct video edits**, each approximately 30 seconds long, each matching one of the creative briefs below.
+
+## Clip analyses:
+{json.dumps(clip_analyses, indent=2)}
+
+---
+
+## The {n} required edits:
+{cuts_section}
+
+---
+
+## Your task:
+
+Return a JSON object with exactly {n} cuts, one per brief above. Each cut must:
+- Start with the best available hook clip for that brief (highest hook_score that matches the vibe)
+- Use a different subset and ordering of clips from the others
+- Have tight trims — keep clips punchy, no dead air
+- Total trimmed duration should approximately equal 30 seconds
+
+Return a JSON object in exactly this format:
+
+```json
+{{
+  "cuts": [
+    {{
+      "id": "{example_cut['id']}",
+      "clips": {json.dumps(example_clips)},
+      "trim": {{
+        {json.dumps(example_clips[0]) if example_clips else '"clip.MOV"'}: {{"start": 0, "end": 8}}
+      }},
+      "transition": "cut"
+    }}
+  ]
+}}
+```
+
+Rules:
+- `clips` must be ordered — first clip is the hook/opener
+- `trim.start` and `trim.end` are in seconds, keep cuts tight and energetic
+- `transition` is one of: `cut` | `fade` — use the transition specified in the brief
+- Only use filenames that exist in the clip analyses provided
+- The `id` values for the {n} cuts must be exactly: {cut_ids}
+- Return ONLY the JSON object, no preamble or explanation
+"""
+
+
+@app.post("/api/projects/{project_id}/analyze-and-plan")
+async def analyze_and_plan(project_id: str, request: Request):
+    """SSE endpoint: analyse every clip with Claude Vision, then generate the full edit plan."""
+    import base64
+    import anthropic
+
+    meta = _load_meta(project_id)
+    plan = _load_plan(project_id)
+    cuts = plan.get("cuts", [])
+
+    clips_dir = Path(meta.get("clips_dir", str(_project_dir(project_id) / "clips")))
+    thumbs = _thumbs_dir(project_id)
+
+    prompt_path = ROOT / "prompts" / "analyze_clip.md"
+    analyze_prompt = prompt_path.read_text()
+
+    from src.config import SUPPORTED_EXTENSIONS
+    clip_files = sorted(
+        [f for f in clips_dir.iterdir() if f.suffix.lower() in SUPPORTED_EXTENSIONS],
+        key=lambda f: f.name,
+    ) if clips_dir.exists() else []
+
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(event: str, data: dict):
+            payload = json.dumps({"event": event, **data})
+            queue.put_nowait(f"data: {payload}\n\n")
+
+        async def run():
+            try:
+                if not clip_files:
+                    emit("error", {"message": "No video clips found in clips directory"})
+                    return
+
+                client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+                clip_analyses = []
+                total = len(clip_files)
+
+                emit("progress", {"message": f"Found {total} clips — starting analysis…"})
+                await asyncio.sleep(0)  # yield so the first event flushes
+
+                for idx, clip_file in enumerate(clip_files, 1):
+                    filename = clip_file.name
+                    stem = clip_file.stem
+
+                    # Reuse cached thumbnail, or extract a new one (async subprocess)
+                    thumb_path = thumbs / f"{stem}.jpg"
+                    if not thumb_path.exists():
+                        proc = await asyncio.create_subprocess_exec(
+                            "ffmpeg", "-y", "-ss", "2", "-i", str(clip_file),
+                            "-frames:v", "1", "-q:v", "2", str(thumb_path),
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        await proc.wait()
+
+                    # Get duration (async subprocess)
+                    probe = await asyncio.create_subprocess_exec(
+                        "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", str(clip_file),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    stdout, _ = await probe.communicate()
+                    try:
+                        duration = round(float(stdout.decode().strip()), 2)
+                    except ValueError:
+                        duration = 0.0
+
+                    # Send to Claude Vision (awaited — non-blocking)
+                    analysis = {
+                        "description": "Analysis failed",
+                        "content_type": "other",
+                        "energy": "medium",
+                        "lighting": "mixed",
+                        "hook_score": 3,
+                        "hook_reason": "Could not analyze",
+                        "tags": [],
+                    }
+                    if thumb_path.exists():
+                        try:
+                            with open(str(thumb_path), "rb") as f:
+                                image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+                            response = await client.messages.create(
+                                model="claude-sonnet-4-6",
+                                max_tokens=500,
+                                messages=[{
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "image",
+                                            "source": {"type": "base64", "media_type": "image/jpeg", "data": image_data},
+                                        },
+                                        {"type": "text", "text": analyze_prompt},
+                                    ],
+                                }],
+                            )
+                            raw = response.content[0].text.strip()
+                            if raw.startswith("```"):
+                                raw = raw.split("```")[1]
+                                if raw.startswith("json"):
+                                    raw = raw[4:]
+                                raw = raw.rsplit("```", 1)[0]
+                            analysis = json.loads(raw)
+                        except Exception as e:
+                            emit("progress", {"message": f"  ⚠ Failed to analyse {filename}: {e}"})
+
+                    clip_analyses.append({
+                        "filename": filename,
+                        "local_path": str(clip_file),
+                        "duration_seconds": duration,
+                        **analysis,
+                    })
+                    emit("progress", {"message": f"Analysed {filename} ({idx}/{total})"})
+
+                # Build dynamic prompt and call planner (awaited)
+                emit("progress", {"message": f"All {total} clips analysed — generating edit plan…"})
+                await asyncio.sleep(0)
+                planner_prompt = _build_plan_prompt(clip_analyses, cuts)
+
+                response = await client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": planner_prompt}],
+                )
+                raw = response.content[0].text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                    raw = raw.rsplit("```", 1)[0]
+
+                try:
+                    ai_plan = json.loads(raw)
+                except json.JSONDecodeError as e:
+                    emit("error", {"message": f"Claude returned invalid JSON for edit plan: {e}"})
+                    return
+
+                ai_cuts_by_id = {c["id"]: c for c in ai_plan.get("cuts", [])}
+
+                updated_cuts = []
+                for cut in cuts:
+                    cid = cut["id"]
+                    ai = ai_cuts_by_id.get(cid, {})
+                    updated_cuts.append({
+                        **cut,  # preserve label, hook, vibe, target_duration, transition
+                        "clips": ai.get("clips", cut.get("clips", [])),
+                        "trim":  ai.get("trim",  cut.get("trim",  {})),
+                        # Only override transition if AI specified one and original is default
+                        "transition": ai.get("transition", cut.get("transition", "cut")),
+                    })
+
+                plan["cuts"] = updated_cuts
+                plan_path = _project_dir(project_id) / "plan.json"
+                plan_path.write_text(json.dumps(plan, indent=2))
+
+                emit("done", {"message": "Edit plan ready!", "plan": plan})
+
+            except Exception as exc:
+                emit("error", {"message": str(exc)})
+            finally:
+                queue.put_nowait(None)
+
+        asyncio.create_task(run())
+
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=30)
+            except asyncio.TimeoutError:
+                yield "data: {\"event\":\"ping\"}\n\n"
+                continue
+            if item is None:
+                break
+            yield item
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/projects/{project_id}/plan")

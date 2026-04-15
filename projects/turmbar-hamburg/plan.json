@@ -2,58 +2,152 @@
   "cuts": [
     {
       "id": "cut_1",
-      "name": "i_didnt_know_i_could_do_this",
-      "label": "Cut 1 — I didn't know I could do this",
-      "hook": "Close-up of hands pouring, uncertain and focused — builds to the beautiful finished result",
-      "vibe": "Soft, personal, aspirational — the surprise of discovering you can do this",
-      "target_duration": 30,
-      "transition": "fade",
-      "clips": ["IMG_6650.MOV", "IMG_6693.MOV", "IMG_6682.MOV", "IMG_6699.MOV", "IMG_6717.MOV"],
+      "name": "skeptic_turns_bartender",
+      "label": "Cut 1 \u2014 The Sceptic's Journey",
+      "hook": "Creator holds up a perfectly garnished cocktail to camera with visible disbelief, saying: 'I made this. ME. The person who burns toast.'",
+      "vibe": "Self-deprecating and warm with a slow-burn payoff. Starts with low expectations and ends in genuine pride \u2014 the kind of video that makes you text a friend immediately.",
+      "clips": [
+        "i_didnt_know_i_could_do_this_seg00.mp4",
+        "i_didnt_know_i_could_do_this_seg01.mp4",
+        "i_didnt_know_i_could_do_this_seg02.mp4",
+        "i_didnt_know_i_could_do_this_seg03.mp4",
+        "i_didnt_know_i_could_do_this_seg04.mp4",
+        "IMG_6712.MOV"
+      ],
       "trim": {
-        "IMG_6650.MOV": {"start": 0, "end": 2.8},
-        "IMG_6693.MOV": {"start": 0, "end": 4},
-        "IMG_6682.MOV": {"start": 50, "end": 60},
-        "IMG_6699.MOV": {"start": 0, "end": 8},
-        "IMG_6717.MOV": {"start": 0, "end": 5}
-      }
+        "i_didnt_know_i_could_do_this_seg00.mp4": {
+          "start": 0,
+          "end": 2.5
+        },
+        "i_didnt_know_i_could_do_this_seg01.mp4": {
+          "start": 0,
+          "end": 3.0
+        },
+        "i_didnt_know_i_could_do_this_seg02.mp4": {
+          "start": 1.0,
+          "end": 6.0
+        },
+        "i_didnt_know_i_could_do_this_seg03.mp4": {
+          "start": 1.0,
+          "end": 6.5
+        },
+        "i_didnt_know_i_could_do_this_seg04.mp4": {
+          "start": 0,
+          "end": 4.0
+        },
+        "IMG_6712.MOV": {
+          "start": 0,
+          "end": 5.0
+        }
+      },
+      "transition": "fade",
+      "target_duration": 30
     },
     {
       "id": "cut_2",
-      "name": "hamburgs_most_underrated_evening",
-      "label": "Cut 2 — Hamburg's most underrated evening",
-      "hook": "Stunning green-lit circular venue interior — immediate FOMO — then moody bar, action, blowtorch",
-      "vibe": "High energy FOMO — this venue is unreal and you're missing it",
-      "target_duration": 30,
-      "transition": "cut",
-      "clips": ["IMG_6683.MOV", "IMG_6626.MOV", "IMG_6686.MOV", "IMG_6666.MOV", "IMG_6665.MOV", "IMG_6642.MOV", "IMG_6661.MOV"],
+      "name": "hamburgs_hidden_evening",
+      "label": "Cut 2 \u2014 The City Secret",
+      "hook": "Wide atmospheric shot of the glowing tower exterior at dusk, voiceover drops immediately: 'Hamburg has been hiding something and I'm annoyed nobody told me sooner.'",
+      "vibe": "FOMO-forward and aspirational, written like a local tip shared between friends. Treats the viewer as an insider being let in on something genuinely special.",
+      "clips": [
+        "hamburgs_most_underrated_evening_seg00.mp4",
+        "hamburgs_most_underrated_evening_seg01.mp4",
+        "hamburgs_most_underrated_evening_seg02.mp4",
+        "IMG_6685.MOV",
+        "hamburgs_most_underrated_evening_seg03.mp4",
+        "hamburgs_most_underrated_evening_seg04.mp4",
+        "hamburgs_most_underrated_evening_seg05.mp4",
+        "hamburgs_most_underrated_evening_seg06.mp4",
+        "IMG_6666.MOV"
+      ],
       "trim": {
-        "IMG_6683.MOV": {"start": 0, "end": 2.1},
-        "IMG_6626.MOV": {"start": 0, "end": 3.7},
-        "IMG_6686.MOV": {"start": 0, "end": 2.6},
-        "IMG_6666.MOV": {"start": 0, "end": 8},
-        "IMG_6665.MOV": {"start": 0, "end": 6},
-        "IMG_6642.MOV": {"start": 0, "end": 4},
-        "IMG_6661.MOV": {"start": 0, "end": 1.8}
-      }
+        "hamburgs_most_underrated_evening_seg00.mp4": {
+          "start": 0,
+          "end": 2.1
+        },
+        "hamburgs_most_underrated_evening_seg01.mp4": {
+          "start": 0,
+          "end": 2.5
+        },
+        "hamburgs_most_underrated_evening_seg02.mp4": {
+          "start": 0,
+          "end": 2.0
+        },
+        "IMG_6685.MOV": {
+          "start": 0,
+          "end": 2.0
+        },
+        "hamburgs_most_underrated_evening_seg03.mp4": {
+          "start": 0,
+          "end": 5.0
+        },
+        "hamburgs_most_underrated_evening_seg04.mp4": {
+          "start": 0,
+          "end": 4.0
+        },
+        "hamburgs_most_underrated_evening_seg05.mp4": {
+          "start": 0,
+          "end": 3.0
+        },
+        "hamburgs_most_underrated_evening_seg06.mp4": {
+          "start": 0,
+          "end": 1.5
+        },
+        "IMG_6666.MOV": {
+          "start": 1.0,
+          "end": 9.0
+        }
+      },
+      "transition": "cut",
+      "target_duration": 30
     },
     {
       "id": "cut_3",
-      "name": "what_they_dont_tell_you",
-      "label": "Cut 3 — What they don't tell you",
-      "hook": "Guests watching the instructor — immediately relatable 'student' energy",
-      "vibe": "Conversational, curious, self-deprecating — list format with a delicious payoff",
-      "target_duration": 30,
-      "transition": "cut",
-      "clips": ["IMG_6637.MOV", "IMG_6638.MOV", "IMG_6636.MOV", "IMG_6640.MOV", "IMG_6655.MOV", "IMG_6656.MOV", "IMG_6722.MOV"],
+      "name": "things_nobody_tells_you",
+      "label": "Cut 3 \u2014 The Honest List",
+      "hook": "Text card appears on screen: 'Things nobody tells you about Turmbar Hamburg' \u2014 creator speaks directly to camera in a relaxed, slightly conspiratorial tone.",
+      "vibe": "Punchy and relatable list format with a dry comedic edge. Each point lands fast. Feels like overhearing an honest conversation, not a sponsored post.",
+      "clips": [
+        "IMG_6638.MOV",
+        "what_they_dont_tell_you_seg01.mp4",
+        "what_they_dont_tell_you_seg03.mp4",
+        "what_they_dont_tell_you_seg04.mp4",
+        "IMG_6699.MOV",
+        "what_they_dont_tell_you_seg05.mp4",
+        "IMG_6717.MOV"
+      ],
       "trim": {
-        "IMG_6637.MOV": {"start": 0, "end": 2},
-        "IMG_6638.MOV": {"start": 2, "end": 10},
-        "IMG_6636.MOV": {"start": 0, "end": 3.2},
-        "IMG_6640.MOV": {"start": 0, "end": 2.9},
-        "IMG_6655.MOV": {"start": 0, "end": 2.9},
-        "IMG_6656.MOV": {"start": 0, "end": 2.4},
-        "IMG_6722.MOV": {"start": 0, "end": 6}
-      }
+        "IMG_6638.MOV": {
+          "start": 0,
+          "end": 4.0
+        },
+        "what_they_dont_tell_you_seg01.mp4": {
+          "start": 0,
+          "end": 5.0
+        },
+        "what_they_dont_tell_you_seg03.mp4": {
+          "start": 0,
+          "end": 2.5
+        },
+        "what_they_dont_tell_you_seg04.mp4": {
+          "start": 0,
+          "end": 2.5
+        },
+        "IMG_6699.MOV": {
+          "start": 0,
+          "end": 7.0
+        },
+        "what_they_dont_tell_you_seg05.mp4": {
+          "start": 0,
+          "end": 2.0
+        },
+        "IMG_6717.MOV": {
+          "start": 0,
+          "end": 4.5
+        }
+      },
+      "transition": "cut",
+      "target_duration": 30
     }
   ]
 }
