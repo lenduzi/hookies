@@ -26,7 +26,7 @@ KEY_COLOR = (255, 210, 0)      # golden yellow for key words
 OUTLINE_COLOR = (0, 0, 0)      # black stroke (classic only)
 OUTLINE_WIDTH = 5
 H_PADDING = 60                 # min px gap from left/right frame edge
-Y_FROM_BOTTOM = 400            # px up from bottom of frame
+Y_FROM_BOTTOM = 520            # px up from bottom of frame
 WORD_GAP = 14                  # px between words
 UPPERCASE = True
 

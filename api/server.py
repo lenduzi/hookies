@@ -567,9 +567,15 @@ async def run_pipeline(project_id: str, req: RunRequest, request: Request):
                     cwd=str(ROOT),
                 )
 
+                _progress_re = re.compile(r"^PROGRESS:(\d+)/(\d+):(.+)$")
                 async for raw_line in proc.stdout:
                     line = raw_line.decode("utf-8", errors="replace").rstrip()
-                    if line:
+                    if not line:
+                        continue
+                    m = _progress_re.match(line)
+                    if m:
+                        emit("progress", {"done": int(m.group(1)), "total": int(m.group(2)), "label": m.group(3)})
+                    else:
                         emit("log", {"message": line})
 
                 await proc.wait()

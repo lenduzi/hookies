@@ -69,6 +69,7 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [status,  setStatus]  = useState<"idle"|"running"|"done"|"error">("idle");
   const [outputs, setOutputs] = useState<OutputFile[]>([]);
+  const [pipelineProgress, setPipelineProgress] = useState<{done:number; total:number; label:string}|null>(null);
   // modals / generate
   const [showNewProject,   setShowNewProject]   = useState(false);
   const [generatingCut,    setGeneratingCut]    = useState<string|null>(null);
@@ -80,8 +81,9 @@ export default function Home() {
   const [angleLanguage,    setAngleLanguage]    = useState("auto");
   const [angleExtra,       setAngleExtra]       = useState("");
 
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const abortRef   = useRef<AbortController|null>(null);
+  const logsEndRef  = useRef<HTMLDivElement>(null);
+  const outputsRef  = useRef<HTMLDivElement>(null);
+  const abortRef    = useRef<AbortController|null>(null);
 
   // ── Loaders ─────────────────────────────────────────────────────────────────
 
@@ -330,7 +332,7 @@ export default function Home() {
     if (running) { abortRef.current?.abort(); setRunning(false); setStatus("idle"); return; }
     if (scriptsDirty) await saveScripts();
     if (planDirty) await savePlan();
-    setLogs([]); setRunning(true); setStatus("running");
+    setLogs([]); setPipelineProgress(null); setRunning(true); setStatus("running");
     const ctrl = new AbortController(); abortRef.current = ctrl;
     try {
       const res = await fetch(`${API}/api/projects/${activeId}/run`, {
@@ -353,8 +355,9 @@ export default function Home() {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const p = JSON.parse(line.slice(6));
-          if (p.event==="log")   setLogs(prev=>[...prev,p.message]);
-          else if (p.event==="done")  { setLogs(prev=>[...prev,"✅ "+p.message]); setOutputs(p.files||[]); setStatus("done"); loadProjects(); }
+          if (p.event==="log")        setLogs(prev=>[...prev,p.message]);
+          else if (p.event==="progress") setPipelineProgress({done:p.done, total:p.total, label:p.label});
+          else if (p.event==="done")  { setLogs(prev=>[...prev,"✅ "+p.message]); setOutputs(p.files||[]); setStatus("done"); loadProjects(); setTimeout(()=>outputsRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),150); }
           else if (p.event==="error") { setLogs(prev=>[...prev,"❌ "+p.message]); setStatus("error"); }
           else if (p.event==="start") { setLogs(prev=>[...prev,p.message]); }
         }
@@ -623,6 +626,18 @@ export default function Home() {
             {/* Log */}
             {logs.length>0 && (
               <Section title="Pipeline Log" subtitle="">
+                {/* Progress bar */}
+                {pipelineProgress && (
+                  <div style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5}}>
+                      <span style={{fontSize:12,color:"var(--text-secondary)"}}>{pipelineProgress.label}</span>
+                      <span style={{fontSize:11,color:"var(--text-muted)"}}>{pipelineProgress.done}/{pipelineProgress.total}</span>
+                    </div>
+                    <div style={{height:4,borderRadius:2,background:"var(--bg-card)",overflow:"hidden"}}>
+                      <div style={{height:"100%",borderRadius:2,background:"var(--accent)",width:`${Math.round(pipelineProgress.done/pipelineProgress.total*100)}%`,transition:"width 0.4s ease"}}/>
+                    </div>
+                  </div>
+                )}
                 <div style={{background:"#080808",border:"1px solid var(--border)",borderRadius:8,padding:"12px 14px",fontFamily:"ui-monospace,monospace",fontSize:12,color:"#aaa",maxHeight:300,overflowY:"auto",lineHeight:1.7}}>
                   {logs.map((line,i)=>(
                     <div key={i} style={{color:line.startsWith("✅")?"var(--green)":line.startsWith("❌")?"var(--red)":line.startsWith("⚠")?"var(--accent)":"#aaa"}}>{line}</div>
@@ -633,24 +648,60 @@ export default function Home() {
             )}
 
             {/* Outputs */}
-            {outputs.length>0 && (
-              <Section title="Output Files" subtitle={`${outputs.length} files ready`}>
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {outputs.map(file=>(
-                    <div key={file.name} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:8,padding:"11px 14px"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span style={{fontSize:15}}>🎬</span>
-                        <div>
-                          <div style={{fontSize:13,fontWeight:500}}>{file.name}</div>
-                          <div style={{fontSize:11,color:"var(--text-muted)"}}>{file.size_mb} MB</div>
+            {outputs.length>0 && (()=>{
+              // Group files by cut number, show angle label as section header
+              const groups: {cutNum:number; label:string; files:OutputFile[]}[] = [];
+              for (const file of outputs) {
+                const m = file.name.match(/^cut_(\d+)_/);
+                const cutNum = m ? parseInt(m[1]) : 0;
+                const pc = planCuts[cutNum-1];
+                const label = pc?.label || `Cut ${cutNum}`;
+                let g = groups.find(x=>x.cutNum===cutNum);
+                if (!g) { g = {cutNum, label, files:[]}; groups.push(g); }
+                g.files.push(file);
+              }
+              groups.sort((a,b)=>a.cutNum-b.cutNum);
+
+              function variantBadge(name: string) {
+                if (name.includes("_cap")) return "VO + Captions";
+                if (name.includes("_vo"))  return "VO only";
+                return "Assembly";
+              }
+
+              return (
+                <div ref={outputsRef}>
+                  <Section title="Output Files" subtitle={`${outputs.length} files · ${groups.length} cuts`}>
+                    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                      {groups.map((g,gi)=>(
+                        <div key={g.cutNum}>
+                          {gi>0 && <div style={{height:1,background:"var(--border)",margin:"0 0 14px"}}/>}
+                          <div style={{fontSize:11,fontWeight:600,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>
+                            Cut {g.cutNum} — {g.label}
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {g.files.map(file=>(
+                              <div key={file.name} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 14px"}}>
+                                <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+                                  <span style={{fontSize:14,flexShrink:0}}>🎬</span>
+                                  <div style={{minWidth:0}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                      <span style={{fontSize:12,fontWeight:500,color:"var(--text-primary)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{file.name}</span>
+                                      <span style={{flexShrink:0,fontSize:10,padding:"2px 6px",borderRadius:4,background:"var(--bg-surface)",border:"1px solid var(--border)",color:"var(--text-muted)"}}>{variantBadge(file.name)}</span>
+                                    </div>
+                                    <div style={{fontSize:11,color:"var(--text-muted)",marginTop:1}}>{file.size_mb} MB</div>
+                                  </div>
+                                </div>
+                                <a href={`${API}${file.url}`} download={file.name} style={{flexShrink:0,padding:"5px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--bg-hover)",color:"var(--text-primary)",fontSize:12,fontWeight:500,textDecoration:"none",marginLeft:12}}>Download</a>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                      <a href={`${API}${file.url}`} download={file.name} style={{padding:"5px 12px",borderRadius:6,border:"1px solid var(--border)",background:"var(--bg-hover)",color:"var(--text-primary)",fontSize:12,fontWeight:500,textDecoration:"none"}}>Download</a>
+                      ))}
                     </div>
-                  ))}
+                  </Section>
                 </div>
-              </Section>
-            )}
+              );
+            })()}
           </div>
         )}
       </main>

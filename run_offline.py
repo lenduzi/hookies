@@ -55,6 +55,21 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 print(f"\n🎬 Hookies — {meta['name']}")
 print("=" * 40)
 
+# ── Progress tracking ─────────────────────────────────────────────────────────
+_n_plan_cuts = len(plan_data.get("cuts", []))
+_TOTAL_STEPS = (
+    (0 if VO_ONLY else 1) +
+    (0 if SKIP_VO else _n_plan_cuts) +
+    (0 if SKIP_CAPTIONS else _n_plan_cuts)
+)
+_step = 0
+
+def _progress(label):
+    global _step
+    _step += 1
+    print(f"PROGRESS:{_step}/{_TOTAL_STEPS}:{label}", flush=True)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Step 0: Download from Google Drive if configured ─────────────────────────
 drive_url = meta.get("drive_url", "").strip()
 
@@ -90,6 +105,7 @@ clip_analyses = list(seen.values())
 
 # ── Step 1: Assemble ──────────────────────────────────────────────────────────
 if not VO_ONLY:
+    _progress(f"Assembling {_n_plan_cuts} cuts…")
     print(f"\nAssembling cuts from plan.json...")
     output_paths = assemble_cuts(plan_data, clip_analyses, output_dir=str(OUTPUT_DIR))
 else:
@@ -112,8 +128,9 @@ if not SKIP_VO:
     script_map = {p.stem: p for p in SCRIPTS_DIR.glob("*.txt")}
     final_paths = []
 
-    for video_path in output_paths:
+    for vo_idx, video_path in enumerate(output_paths):
         cut_name = Path(video_path).stem
+        _progress(f"Voiceover — {cut_name} ({vo_idx+1}/{len(output_paths)})")
         script_file = script_map.get(cut_name)
         if not script_file:
             print(f"  ⚠ No script for {cut_name} — skipping VO")
@@ -139,8 +156,9 @@ if not SKIP_CAPTIONS:
     print("\n📝 Generating captions with Whisper...")
     captioned_paths = []
 
-    for video_path in final_paths:
+    for cap_idx, video_path in enumerate(final_paths):
         stem = Path(video_path).stem
+        _progress(f"Captions — {stem} ({cap_idx+1}/{len(final_paths)})")
         vo_mp3 = str(OUTPUT_DIR / f"{stem.replace('_vo', '')}_vo.mp3")
 
         if not os.path.exists(vo_mp3):
