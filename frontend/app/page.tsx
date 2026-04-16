@@ -7,13 +7,35 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Voice       { id: string; label: string; description: string }
-interface ProjectMeta { id: string; name: string; brief: string; drive_url: string; cut_count: number; output_count: number }
-interface Cut         { id: string; name: string; label: string; hook: string; vibe: string; script: string; has_clips: boolean }
+interface ProjectMeta { id: string; name: string; brief: string; angle?: string; angles?: string[]; drive_url: string; cut_count: number; output_count: number }
+interface Cut         { id: string; name: string; label: string; hook: string; vibe: string; assigned_angle: string; script: string; has_clips: boolean }
 interface OutputFile  { name: string; size_mb: number; url: string }
 interface Variant     { label: string; script: string }
 interface ClipInfo    { filename: string; duration: number; size_mb: number; thumbnail_url: string }
 interface TrimPoint   { start: number; end: number }
 interface PlanCut     { id: string; name: string; label: string; clips: string[]; trim: Record<string, TrimPoint>; transition: string }
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const ANGLE_PILLS = [
+  "Date night idea",
+  "Things to do in [city]",
+  "Hidden gem",
+  "Underrated activity",
+  "Only locals know",
+  "Weekend activity",
+  "POV you discovered",
+  "Behind the scenes",
+];
+
+const CTA_PILLS = [
+  "Link in bio",
+  "DM me",
+  "Comment below",
+  "Save this",
+  "Follow for more",
+  "Tag a friend",
+];
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 
@@ -38,6 +60,7 @@ export default function Home() {
   const [syncingDrive, setSyncingDrive] = useState(false);
   // pipeline
   const [voice,          setVoice]          = useState("FGY2WhTYpPnrIDTdsKH5"); // Laura (ElevenLabs default)
+  const [captionStyle,   setCaptionStyle]   = useState("classic");
   const [skipAssembly,   setSkipAssembly]   = useState(false);
   const [skipVo,         setSkipVo]         = useState(false);
   const [skipCaptions,   setSkipCaptions]   = useState(false);
@@ -51,9 +74,10 @@ export default function Home() {
   const [generatingCut,    setGeneratingCut]    = useState<string|null>(null);
   const [variants,         setVariants]         = useState<{cutId:string; items:Variant[]}|null>(null);
   const [generatingAngles, setGeneratingAngles] = useState(false);
-  const [angleEmotion,     setAngleEmotion]     = useState("");
+  const [angleContents,    setAngleContents]    = useState<string[]>([]);  // up to 3, one per cut
   const [anglePlatform,    setAnglePlatform]    = useState("");
   const [angleCta,         setAngleCta]         = useState("");
+  const [angleLanguage,    setAngleLanguage]    = useState("auto");
   const [angleExtra,       setAngleExtra]       = useState("");
 
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -75,14 +99,17 @@ export default function Home() {
   }, []);
 
   const loadProject = useCallback(async (id: string) => {
-    const [scripts, plan, outputs] = await Promise.all([
+    const [scripts, projectData, outputs] = await Promise.all([
       fetch(`${API}/api/projects/${id}/scripts`).then(r=>r.json()).catch(()=>({cuts:[]})),
       fetch(`${API}/api/projects/${id}`).then(r=>r.json()).catch(()=>({plan:{cuts:[]}})),
       fetch(`${API}/api/projects/${id}/outputs`).then(r=>r.json()).catch(()=>({files:[]})),
     ]);
     setCuts(scripts.cuts||[]);
     setOutputs(outputs.files||[]);
-    const rawCuts: PlanCut[] = (plan.plan?.cuts||[]).map((c: Record<string,unknown>) => ({
+    // Populate angles from meta (prefer multi-angle list, fall back to single angle)
+    const metaAngles: string[] = projectData.project?.angles || (projectData.project?.angle ? [projectData.project.angle] : []);
+    setAngleContents(metaAngles);
+    const rawCuts: PlanCut[] = (projectData.plan?.cuts||[]).map((c: Record<string,unknown>) => ({
       id: c.id as string,
       name: c.name as string,
       label: (c.label||c.name) as string,
@@ -113,6 +140,7 @@ export default function Home() {
   function switchProject(id: string) {
     if (id === activeId) return;
     setActiveId(id);
+    setAngleContents([]); // cleared; loadProject will repopulate from meta
     loadProject(id);
   }
 
@@ -261,7 +289,13 @@ export default function Home() {
     try {
       const d = await fetch(`${API}/api/projects/${activeId}/generate-angles`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({emotion:angleEmotion,platform:anglePlatform,cta:angleCta,extra:angleExtra}),
+        body: JSON.stringify({
+          angles: angleContents,
+          platform: anglePlatform,
+          cta: angleCta,
+          language: angleLanguage,
+          extra: angleExtra,
+        }),
       }).then(r=>r.json());
       if (d.cuts) {
         setCuts(d.cuts);
@@ -301,7 +335,14 @@ export default function Home() {
     try {
       const res = await fetch(`${API}/api/projects/${activeId}/run`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({voice,skip_assembly:skipAssembly,skip_vo:skipVo,skip_captions:skipCaptions,skip_download:skipDownload}),
+        body: JSON.stringify({
+          voice,
+          skip_assembly: skipAssembly,
+          skip_vo: skipVo,
+          skip_captions: skipCaptions,
+          skip_download: skipDownload,
+          caption_style: captionStyle,
+        }),
         signal: ctrl.signal,
       });
       const reader = res.body!.getReader(); const decoder = new TextDecoder(); let buf="";
@@ -377,25 +418,49 @@ export default function Home() {
                 {generatingAngles?<><Spinner size={11}/> Generating…</>:"✦ Generate angles"}
               </button>}
             >
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {[
-                  {label:"Target emotion", opts:["FOMO","Inspiration","Curiosity","Trust","Humour"],             val:angleEmotion,  set:setAngleEmotion},
-                  {label:"Platform",       opts:["TikTok / Reels","YouTube Shorts","Both"],                     val:anglePlatform, set:setAnglePlatform},
-                  {label:"CTA style",      opts:["Link in bio","DM me","Comment below","Save this"],            val:angleCta,      set:setAngleCta},
-                ].map(row=>(
-                  <div key={row.label} style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0}}>{row.label}</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {row.opts.map(opt=>(
-                        <button key={opt} onClick={()=>row.set(row.val===opt?"":opt)} style={{padding:"4px 10px",borderRadius:5,fontSize:12,cursor:"pointer",background:row.val===opt?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${row.val===opt?"var(--accent-border)":"var(--border)"}`,color:row.val===opt?"var(--accent)":"var(--text-secondary)"}}>{opt}</button>
-                      ))}
-                    </div>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+
+                {/* Content angles — multi-select, up to 3 */}
+                <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                  <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0,paddingTop:4}}>Content angles</div>
+                  <AngleSelector value={angleContents} onChange={setAngleContents}/>
+                </div>
+
+                {/* Platform */}
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0}}>Platform</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {["TikTok / Reels","YouTube Shorts","Both"].map(opt=>(
+                      <button key={opt} onClick={()=>setAnglePlatform(anglePlatform===opt?"":opt)} style={{padding:"4px 10px",borderRadius:5,fontSize:12,cursor:"pointer",background:anglePlatform===opt?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${anglePlatform===opt?"var(--accent-border)":"var(--border)"}`,color:anglePlatform===opt?"var(--accent)":"var(--text-secondary)"}}>{opt}</button>
+                    ))}
                   </div>
-                ))}
+                </div>
+
+                {/* Language */}
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0}}>Script language</div>
+                  <div style={{display:"flex",gap:6}}>
+                    {[{val:"auto",label:"Auto (match brief)"},{val:"en",label:"English"},{val:"de",label:"Deutsch"}].map(opt=>(
+                      <button key={opt.val} onClick={()=>setAngleLanguage(opt.val)} style={{padding:"4px 10px",borderRadius:5,fontSize:12,cursor:"pointer",background:angleLanguage===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${angleLanguage===opt.val?"var(--accent-border)":"var(--border)"}`,color:angleLanguage===opt.val?"var(--accent)":"var(--text-secondary)"}}>{opt.label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* CTA — pills + free-text input */}
+                <PillInputRow
+                  label="CTA style"
+                  pills={CTA_PILLS}
+                  value={angleCta}
+                  onChange={setAngleCta}
+                  placeholder="Custom CTA — e.g. 'You HAVE to try this!'"
+                />
+
+                {/* Extra notes */}
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
                   <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0}}>Extra notes</div>
                   <input value={angleExtra} onChange={e=>setAngleExtra(e.target.value)} placeholder="Optional — e.g. 'focus on the blowtorch moment'" style={{...inputStyle,flex:1}}/>
                 </div>
+
               </div>
             </Section>
 
@@ -461,7 +526,13 @@ export default function Home() {
                           <span style={{width:22,height:22,borderRadius:5,flexShrink:0,background:"var(--accent-dim)",border:"1px solid var(--accent-border)",color:"var(--accent)",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{i+1}</span>
                           <div>
                             <div style={{fontSize:13,fontWeight:500}}>{cut.label}</div>
-                            {cut.vibe && <div style={{fontSize:11,color:"var(--text-muted)",marginTop:1}}>{cut.vibe}</div>}
+                            {cut.assigned_angle && (
+                              <div style={{display:"inline-flex",alignItems:"center",gap:4,marginTop:3,padding:"2px 7px",borderRadius:4,background:"var(--accent-dim)",border:"1px solid var(--accent-border)"}}>
+                                <span style={{fontSize:10,fontWeight:700,color:"var(--accent)"}}>ANGLE</span>
+                                <span style={{fontSize:11,color:"var(--text-primary)"}}>{cut.assigned_angle}</span>
+                              </div>
+                            )}
+                            {cut.vibe && <div style={{fontSize:11,color:"var(--text-muted)",marginTop:3}}>{cut.vibe}</div>}
                           </div>
                         </div>
                         <button onClick={()=>generateVariants(cut.id)} disabled={generatingCut!==null} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:6,border:"1px solid var(--border)",background:"var(--bg-hover)",color:"var(--text-secondary)",fontSize:12,cursor:"pointer"}}>
@@ -493,19 +564,39 @@ export default function Home() {
 
             {/* Pipeline Options */}
             <Section title="Pipeline Options" subtitle="Skip steps to speed up iteration">
-              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                {[
-                  {label:"Skip download", desc:"Reuse cached clips",    val:skipDownload,  set:setSkipDownload},
-                  {label:"Skip assembly", desc:"Reuse existing cuts",   val:skipAssembly,  set:setSkipAssembly},
-                  {label:"Skip voiceover",desc:"No TTS",                val:skipVo,        set:setSkipVo},
-                  {label:"Skip captions", desc:"No burn-in",            val:skipCaptions,  set:setSkipCaptions},
-                ].map(opt=>(
-                  <button key={opt.label} onClick={()=>opt.set(!opt.val)} style={{...chipStyle,background:opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${opt.val?"var(--accent-border)":"var(--border)"}`}}>
-                    <Checkbox checked={opt.val}/>
-                    <span style={{fontWeight:500,color:"var(--text-primary)"}}>{opt.label}</span>
-                    <span style={{fontSize:11,color:"var(--text-muted)"}}>{opt.desc}</span>
-                  </button>
-                ))}
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {/* Skip toggles */}
+                <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                  {[
+                    {label:"Skip download", desc:"Reuse cached clips",    val:skipDownload,  set:setSkipDownload},
+                    {label:"Skip assembly", desc:"Reuse existing cuts",   val:skipAssembly,  set:setSkipAssembly},
+                    {label:"Skip voiceover",desc:"No TTS",                val:skipVo,        set:setSkipVo},
+                    {label:"Skip captions", desc:"No burn-in",            val:skipCaptions,  set:setSkipCaptions},
+                  ].map(opt=>(
+                    <button key={opt.label} onClick={()=>opt.set(!opt.val)} style={{...chipStyle,background:opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${opt.val?"var(--accent-border)":"var(--border)"}`}}>
+                      <Checkbox checked={opt.val}/>
+                      <span style={{fontWeight:500,color:"var(--text-primary)"}}>{opt.label}</span>
+                      <span style={{fontSize:11,color:"var(--text-muted)"}}>{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                {/* Caption style */}
+                {!skipCaptions && (
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Caption style</div>
+                    <div style={{display:"flex",gap:6}}>
+                      {[
+                        {val:"classic", label:"Classic", desc:"Bold + golden highlights"},
+                        {val:"pill",    label:"Pill",    desc:"Dark background box"},
+                      ].map(opt=>(
+                        <button key={opt.val} onClick={()=>setCaptionStyle(opt.val)} style={{...chipStyle,background:captionStyle===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${captionStyle===opt.val?"var(--accent-border)":"var(--border)"}`}}>
+                          <span style={{fontWeight:500,color:captionStyle===opt.val?"var(--accent)":"var(--text-primary)"}}>{opt.label}</span>
+                          <span style={{fontSize:11,color:"var(--text-muted)"}}>{opt.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </Section>
 
@@ -564,8 +655,9 @@ export default function Home() {
       </main>
 
       {showNewProject && (
-        <NewProjectModal onClose={()=>setShowNewProject(false)} onCreate={async(name,brief,driveUrl)=>{
-          const d = await fetch(`${API}/api/projects`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,brief,drive_url:driveUrl})}).then(r=>r.json());
+        <NewProjectModal onClose={()=>setShowNewProject(false)} onCreate={async(name,brief,angle,driveUrl)=>{
+          const d = await fetch(`${API}/api/projects`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,brief,angle,drive_url:driveUrl})}).then(r=>r.json());
+          if (angle) setAngleContents([angle]); // pre-populate angle selector from modal
           setShowNewProject(false);
           const ps = await loadProjects();
           const newId = d.project?.id||ps[ps.length-1]?.id;
@@ -577,6 +669,129 @@ export default function Home() {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes spin   { to{transform:rotate(360deg)} }
       `}</style>
+    </div>
+  );
+}
+
+// ── AngleSelector ─────────────────────────────────────────────────────────────
+// Multi-select angle picker. Up to 3 angles, one per cut.
+// Clicking a pill toggles it. Selecting 3 disables remaining pills.
+// Custom angles can be typed and added with Enter or the + button.
+
+function AngleSelector({value, onChange}: {value: string[]; onChange: (v: string[]) => void}) {
+  const [custom, setCustom] = useState("");
+
+  function toggle(opt: string) {
+    if (value.includes(opt)) {
+      onChange(value.filter(a => a !== opt));
+    } else if (value.length < 3) {
+      onChange([...value, opt]);
+    }
+  }
+
+  function addCustom() {
+    const t = custom.trim();
+    if (!t || value.length >= 3 || value.includes(t)) return;
+    onChange([...value, t]);
+    setCustom("");
+  }
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8,flex:1}}>
+
+      {/* Selected angle tags */}
+      {value.length > 0 && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {value.map((a, i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 6px 4px 10px",borderRadius:6,background:"var(--accent-dim)",border:"1px solid var(--accent-border)"}}>
+              <span style={{fontSize:10,fontWeight:700,color:"var(--accent)",letterSpacing:"0.04em",marginRight:2}}>CUT {i+1}</span>
+              <span style={{fontSize:12,color:"var(--text-primary)"}}>{a}</span>
+              <button onClick={()=>onChange(value.filter((_,idx)=>idx!==i))} style={{marginLeft:2,width:16,height:16,borderRadius:3,border:"none",background:"transparent",color:"var(--text-muted)",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Preset pills */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {ANGLE_PILLS.map(opt => {
+          const idx = value.indexOf(opt);
+          const selected = idx !== -1;
+          const disabled = !selected && value.length >= 3;
+          return (
+            <button key={opt} onClick={()=>!disabled && toggle(opt)} style={{
+              padding:"4px 10px", borderRadius:5, fontSize:12,
+              cursor: disabled ? "default" : "pointer",
+              background: selected ? "var(--accent-dim)" : "var(--bg-card)",
+              border: `1px solid ${selected ? "var(--accent-border)" : "var(--border)"}`,
+              color: selected ? "var(--accent)" : disabled ? "var(--text-muted)" : "var(--text-secondary)",
+              opacity: disabled ? 0.35 : 1,
+              transition: "opacity 0.1s",
+            }}>
+              {selected && <span style={{fontSize:10,fontWeight:700,marginRight:5}}>CUT {idx+1}</span>}
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Custom angle input — only shown when fewer than 3 selected */}
+      {value.length < 3 && (
+        <div style={{display:"flex",gap:6}}>
+          <input
+            value={custom}
+            onChange={e=>setCustom(e.target.value)}
+            onKeyDown={e=>{ if (e.key==="Enter") { e.preventDefault(); addCustom(); } }}
+            placeholder={value.length===0 ? "Or type a custom angle…" : "Add another angle…"}
+            style={{...inputStyle, flex:1}}
+          />
+          {custom.trim() && (
+            <button onClick={addCustom} style={actionBtnStyle}>+ Add</button>
+          )}
+        </div>
+      )}
+
+      {value.length === 0 && (
+        <div style={{fontSize:11,color:"var(--text-muted)"}}>
+          Select up to 3 — one per cut. Leave empty to let Claude decide.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PillInputRow ──────────────────────────────────────────────────────────────
+// A reusable row with pill quick-select + free-text input below.
+// Clicking a pill populates the input; typing overrides the pill selection.
+
+function PillInputRow({label, pills, value, onChange, placeholder}: {
+  label: string;
+  pills: string[];
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+      <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0,paddingTop:6}}>{label}</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6,flex:1}}>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {pills.map(opt=>(
+            <button key={opt} onClick={()=>onChange(opt)} style={{
+              padding:"4px 10px", borderRadius:5, fontSize:12, cursor:"pointer",
+              background: value===opt ? "var(--accent-dim)" : "var(--bg-card)",
+              border: `1px solid ${value===opt ? "var(--accent-border)" : "var(--border)"}`,
+              color: value===opt ? "var(--accent)" : "var(--text-secondary)",
+            }}>{opt}</button>
+          ))}
+        </div>
+        <input
+          value={value}
+          onChange={e=>onChange(e.target.value)}
+          placeholder={placeholder}
+          style={{...inputStyle}}
+        />
+      </div>
     </div>
   );
 }
@@ -779,30 +994,54 @@ function EmptyState({onNew}:{onNew:()=>void}) {
   );
 }
 
-function NewProjectModal({onClose, onCreate}:{onClose:()=>void; onCreate:(name:string,brief:string,driveUrl:string)=>Promise<void>}) {
+function NewProjectModal({onClose, onCreate}:{
+  onClose:()=>void;
+  onCreate:(name:string, brief:string, angle:string, driveUrl:string)=>Promise<void>
+}) {
   const [name,     setName]     = useState("");
   const [brief,    setBrief]    = useState("");
+  const [angle,    setAngle]    = useState("");
   const [driveUrl, setDriveUrl] = useState("");
   const [creating, setCreating] = useState(false);
 
   async function submit() {
     if (!name.trim()) return;
-    setCreating(true); await onCreate(name.trim(),brief.trim(),driveUrl.trim()); setCreating(false);
+    setCreating(true); await onCreate(name.trim(), brief.trim(), angle.trim(), driveUrl.trim()); setCreating(false);
   }
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50}} onClick={onClose}>
-      <div style={{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:28,width:480,boxShadow:"0 24px 48px rgba(0,0,0,0.5)"}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:12,padding:28,width:500,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 24px 48px rgba(0,0,0,0.5)"}} onClick={e=>e.stopPropagation()}>
         <div style={{fontSize:16,fontWeight:600,marginBottom:20}}>New project</div>
+
         <Field label="Project name" hint="e.g. Turmbar Hamburg">
           <input value={name} onChange={e=>setName(e.target.value)} placeholder="My awesome venue" style={inputStyle} autoFocus/>
         </Field>
-        <Field label="Brief" hint="Describe the venue/creator, audience, and tone — Claude uses this to generate scripts">
-          <textarea rows={4} value={brief} onChange={e=>setBrief(e.target.value)} placeholder="A cocktail class venue in Hamburg targeting young professionals. Warm, self-deprecating tone." style={textareaStyle}/>
+
+        <Field label="About the venue" hint="Describe the venue/creator, audience, and tone — Claude uses this as context for all scripts">
+          <textarea rows={3} value={brief} onChange={e=>setBrief(e.target.value)} placeholder="A cocktail class venue in Hamburg targeting young professionals. Warm, self-deprecating tone." style={textareaStyle}/>
         </Field>
+
+        <Field label="Content angle" hint="What should the video be about? Pick a preset or write your own (you can change this later)">
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {ANGLE_PILLS.map(opt=>(
+                <button key={opt} onClick={()=>setAngle(opt)} style={{
+                  padding:"4px 10px", borderRadius:5, fontSize:12, cursor:"pointer",
+                  background: angle===opt ? "var(--accent-dim)" : "var(--bg-card)",
+                  border: `1px solid ${angle===opt ? "var(--accent-border)" : "var(--border)"}`,
+                  color: angle===opt ? "var(--accent)" : "var(--text-secondary)",
+                }}>{opt}</button>
+              ))}
+            </div>
+            <input value={angle} onChange={e=>setAngle(e.target.value)} placeholder="e.g. 'Hidden gem in Hamburg'" style={inputStyle}/>
+          </div>
+        </Field>
+
         <Field label="Google Drive folder URL" hint="Optional — leave empty to use local clips">
           <input value={driveUrl} onChange={e=>setDriveUrl(e.target.value)} placeholder="https://drive.google.com/drive/folders/…" style={inputStyle}/>
         </Field>
+
         <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:8}}>
           <button onClick={onClose} style={{padding:"8px 16px",borderRadius:7,border:"1px solid var(--border)",background:"transparent",color:"var(--text-secondary)",cursor:"pointer",fontSize:13}}>Cancel</button>
           <button onClick={submit} disabled={creating||!name.trim()} style={{padding:"8px 20px",borderRadius:7,border:"none",background:"var(--accent)",color:"#0d0d0d",fontWeight:600,fontSize:13,cursor:"pointer"}}>{creating?"Creating…":"Create project"}</button>
@@ -847,8 +1086,8 @@ function Checkbox({checked}:{checked:boolean}) {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const inputStyle: React.CSSProperties = {width:"100%",padding:"8px 11px",background:"var(--bg-base)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text-primary)",fontSize:13,outline:"none"};
-const textareaStyle: React.CSSProperties = {width:"100%",padding:"9px 11px",background:"var(--bg-base)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text-primary)",fontSize:13,resize:"vertical",outline:"none",lineHeight:1.6};
+const inputStyle: React.CSSProperties = {width:"100%",padding:"8px 11px",background:"var(--bg-base)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text-primary)",fontSize:13,outline:"none",boxSizing:"border-box"};
+const textareaStyle: React.CSSProperties = {width:"100%",padding:"9px 11px",background:"var(--bg-base)",border:"1px solid var(--border)",borderRadius:6,color:"var(--text-primary)",fontSize:13,resize:"vertical",outline:"none",lineHeight:1.6,boxSizing:"border-box"};
 const cardStyle: React.CSSProperties = {padding:16,background:"var(--bg-card)",border:"1px solid var(--border)",borderRadius:10};
 const chipStyle: React.CSSProperties = {display:"flex",alignItems:"center",gap:6,padding:"7px 11px",borderRadius:7,cursor:"pointer",fontSize:12};
 const actionBtnStyle: React.CSSProperties = {padding:"5px 12px",borderRadius:6,border:"1px solid var(--accent-border)",background:"var(--accent-dim)",color:"var(--accent)",fontSize:12,fontWeight:500,cursor:"pointer"};

@@ -70,6 +70,7 @@ VOICES = [
 class CreateProjectRequest(BaseModel):
     name: str
     brief: str = ""
+    angle: str = ""       # content angle / hook type (e.g. "hidden gem", "date night idea")
     drive_url: str = ""
 
 class ScriptEntry(BaseModel):
@@ -84,10 +85,12 @@ class GenerateRequest(BaseModel):
     tone_hint: str = ""  # optional extra nudge
 
 class GenerateAnglesRequest(BaseModel):
-    emotion: str = ""    # e.g. "FOMO", "Inspiration"
-    platform: str = ""   # e.g. "TikTok / Reels"
-    cta: str = ""        # e.g. "Link in bio"
-    extra: str = ""      # free-text extra notes
+    platform: str = ""          # e.g. "TikTok / Reels"
+    cta: str = ""               # e.g. "Link in bio"
+    angles: list[str] = []      # up to 3 angles, one per cut (new multi-select)
+    angle: str = ""             # single angle — backward compat fallback
+    language: str = "auto"      # "auto" | "en" | "de"
+    extra: str = ""             # free-text extra notes
 
 class RunRequest(BaseModel):
     voice: str = "FGY2WhTYpPnrIDTdsKH5"  # Laura (ElevenLabs default)
@@ -95,6 +98,7 @@ class RunRequest(BaseModel):
     skip_vo: bool = False
     skip_captions: bool = False
     skip_download: bool = False
+    caption_style: str = "classic"        # "classic" or "pill"
 
 
 # ── Project helpers ───────────────────────────────────────────────────────────
@@ -153,6 +157,7 @@ def _cuts_with_scripts(project_id: str) -> list[dict]:
             "label": cut.get("label", cut["name"]),
             "hook": cut.get("hook", ""),
             "vibe": cut.get("vibe", ""),
+            "assigned_angle": cut.get("assigned_angle", ""),
             "has_clips": len(cut.get("clips", [])) > 0,
             "script": _read_script(project_id, f"{cut['id']}_{cut['name']}"),
         }
@@ -195,6 +200,7 @@ def create_project(req: CreateProjectRequest):
         "id": project_id,
         "name": req.name,
         "brief": req.brief,
+        "angle": req.angle,
         "drive_url": req.drive_url,
         "clips_dir": str(d / "clips"),
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -323,39 +329,39 @@ def generate_scripts(project_id: str, req: GenerateRequest):
     return result  # {"variants": [...]}
 
 
-ANGLES_PROMPT = """You are a social media video strategist and UGC scriptwriter specialising in Instagram Reels and TikTok.
+ANGLES_PROMPT = """You are writing voiceover scripts for short-form social media videos (Instagram Reels / TikTok) about a specific venue or experience.
 
-PROJECT BRIEF:
+━━━ VENUE / PROJECT BRIEF ━━━
 {brief}
 
-PARAMETERS:
-- Target emotion: {emotion}
-- Platform: {platform}
-- CTA style: {cta}
+━━━ OUTPUT RULES — follow every rule, no exceptions ━━━
+1. LANGUAGE: Write every script in {language}.
+2. VENUE: Every script must name the venue and include at least one concrete detail from the brief (a specific event, feature, or experience mentioned above).
+3. CTA: Every script must end with this call to action — use the exact words or a close natural paraphrase: "{cta}"
+4. LENGTH: 40–60 words per script. Conversational UGC tone — sounds like a real person, not an ad.
+5. PLATFORM: {platform}
 {extra_line}
+━━━ ANGLE ASSIGNMENTS ━━━
+{angle_assignments}
 
-Generate exactly 3 distinct video angle concepts for this project. Each angle should have a different hook strategy, emotional approach, and narrative structure — they should feel like genuinely different videos, not variations on the same idea.
+━━━ OUTPUT FORMAT ━━━
+Return ONLY valid JSON, no markdown fences. Include assigned_angle verbatim for each cut — this is how we verify you followed the assignment.
 
-For each angle provide:
-- name: a short slug (snake_case, 3-5 words)
-- label: a human-readable title (e.g. "Cut 1 — The Sceptic's Journey")
-- hook: one sentence describing the visual/verbal opening hook
-- vibe: 1-2 sentence tone description
-- script: a ready-to-use voiceover script (40-60 words, conversational, authentic UGC tone, ends with a soft CTA)
-
-Return ONLY valid JSON, no markdown fences:
 {{
+  "key_words": ["WORD1", ...],
   "cuts": [
     {{
       "id": "cut_1",
-      "name": "slug_name_here",
+      "assigned_angle": "exact angle text from assignment",
+      "name": "snake_case_slug",
       "label": "Cut 1 — Human Title",
-      "hook": "Opening hook description",
-      "vibe": "Tone and energy description",
-      "script": "Full voiceover script..."
+      "hook": "One sentence — the verbal/visual opening that immediately signals the angle",
+      "vibe": "1-2 sentences on tone and energy",
+      "script": "Full 40-60 word voiceover. Names the venue. Ends with the specified CTA."
     }},
     {{
       "id": "cut_2",
+      "assigned_angle": "...",
       "name": "...",
       "label": "Cut 2 — ...",
       "hook": "...",
@@ -364,6 +370,7 @@ Return ONLY valid JSON, no markdown fences:
     }},
     {{
       "id": "cut_3",
+      "assigned_angle": "...",
       "name": "...",
       "label": "Cut 3 — ...",
       "hook": "...",
@@ -371,7 +378,51 @@ Return ONLY valid JSON, no markdown fences:
       "script": "..."
     }}
   ]
-}}"""
+}}
+
+key_words: 6-12 uppercase words across all 3 scripts worth highlighting in captions — venue name, location, event names, power words."""
+
+
+def _build_angle_assignments(angles: list[str]) -> str:
+    """Return the angle-assignment block for ANGLES_PROMPT based on selection count."""
+    if len(angles) == 3:
+        return (
+            f"ANGLE ASSIGNMENTS — each cut must be built entirely around its assigned angle.\n"
+            f"The brief provides context about the venue; the angle tells you WHAT the video is about.\n\n"
+            f'CUT 1 ANGLE: "{angles[0]}"\n'
+            f"  → Hook, vibe, and script must frame the venue specifically through this lens.\n\n"
+            f'CUT 2 ANGLE: "{angles[1]}"\n'
+            f"  → Hook, vibe, and script must frame the venue specifically through this lens.\n\n"
+            f'CUT 3 ANGLE: "{angles[2]}"\n'
+            f"  → Hook, vibe, and script must frame the venue specifically through this lens.\n\n"
+            f"These are three completely different videos targeting three different search intents. "
+            f"Someone watching Cut 1 should immediately know it's about '{angles[0]}', not '{angles[1]}'."
+        )
+    if len(angles) == 2:
+        return (
+            f"ANGLE ASSIGNMENTS — two angles are specified; invent a third that complements them:\n\n"
+            f'CUT 1 ANGLE: "{angles[0]}"\n'
+            f"  → Hook, vibe, and script must frame the venue through this lens.\n\n"
+            f'CUT 2 ANGLE: "{angles[1]}"\n'
+            f"  → Hook, vibe, and script must frame the venue through this lens.\n\n"
+            f"CUT 3 ANGLE: Invent a third angle complementary to the above two.\n"
+            f"  → Choose an angle that targets a different audience or search intent."
+        )
+    if len(angles) == 1:
+        return (
+            f'ANGLE FOR ALL 3 CUTS: "{angles[0]}"\n\n'
+            f"Generate 3 distinct takes on this single angle. Each cut must have:\n"
+            f"- A completely different hook strategy (e.g. question, bold statement, POV opening)\n"
+            f"- A different emotional frame (e.g. FOMO, curiosity, inspiration)\n"
+            f"- A different narrative structure\n"
+            f"They must feel like meaningfully different videos, not minor variations."
+        )
+    # 0 angles — Claude decides
+    return (
+        "ANGLES: You decide. Generate 3 distinct content angles that work well for this venue/project.\n"
+        "Each must target a different search intent or emotional trigger — "
+        "they should feel like genuinely different videos, not variations on the same idea."
+    )
 
 @app.post("/api/projects/{project_id}/generate-angles")
 def generate_angles(project_id: str, req: GenerateAnglesRequest):
@@ -382,11 +433,19 @@ def generate_angles(project_id: str, req: GenerateAnglesRequest):
     if not brief:
         raise HTTPException(status_code=400, detail="Project has no brief — add one before generating angles")
 
-    extra_line = f"- Extra notes: {req.extra}" if req.extra else ""
+    # Resolve angles: multi-select takes precedence, fall back to single angle, then meta
+    angles = req.angles or ([req.angle] if req.angle else []) or meta.get("angles", []) or ([meta.get("angle")] if meta.get("angle") else [])
+
+    # Resolve language
+    lang_map = {"en": "English", "de": "German / Deutsch"}
+    language = lang_map.get(req.language, "the same language as the brief above (auto-detect)")
+
+    extra_line = f"Extra notes: {req.extra}" if req.extra else ""
 
     prompt = ANGLES_PROMPT.format(
         brief=brief,
-        emotion=req.emotion or "any",
+        language=language,
+        angle_assignments=_build_angle_assignments(angles),
         platform=req.platform or "TikTok / Instagram Reels",
         cta=req.cta or "Link in bio",
         extra_line=extra_line,
@@ -396,6 +455,13 @@ def generate_angles(project_id: str, req: GenerateAnglesRequest):
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1500,
+        system=(
+            "You are a precise UGC video scriptwriter. "
+            "When angle assignments are provided you follow them exactly — "
+            "each cut's hook, vibe, and script must be built around its assigned angle. "
+            "You never blend angles or let background context override explicit assignments. "
+            "You always return valid JSON and nothing else."
+        ),
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -412,6 +478,23 @@ def generate_angles(project_id: str, req: GenerateAnglesRequest):
     if len(cuts) != 3:
         raise HTTPException(status_code=500, detail=f"Expected 3 cuts, got {len(cuts)}")
 
+    # Warn if assigned_angle fields don't match requested angles (helps catch prompt drift)
+    if len(angles) == 3:
+        for i, cut in enumerate(cuts):
+            returned = cut.get("assigned_angle", "")
+            if returned and returned.lower() != angles[i].lower():
+                import sys
+                print(f"  ⚠ angle mismatch cut_{i+1}: expected '{angles[i]}' got '{returned}'", file=sys.stderr)
+
+    # Persist key_words + angles back to meta
+    key_words = result.get("key_words", [])
+    if key_words:
+        meta["key_words"] = key_words
+    if angles:
+        meta["angles"] = angles
+        meta["angle"] = angles[0]  # backward compat
+    (_project_dir(project_id) / "meta.json").write_text(json.dumps(meta, indent=2))
+
     # Load existing plan to preserve clips/trim data
     plan = _load_plan(project_id)
     existing_by_id = {c["id"]: c for c in plan.get("cuts", [])}
@@ -425,6 +508,7 @@ def generate_angles(project_id: str, req: GenerateAnglesRequest):
             "label": cut["label"],
             "hook": cut["hook"],
             "vibe": cut["vibe"],
+            "assigned_angle": cut.get("assigned_angle", ""),
             "clips": existing.get("clips", []),
             "trim": existing.get("trim", {}),
             "transition": existing.get("transition", "cut"),
@@ -467,6 +551,8 @@ async def run_pipeline(project_id: str, req: RunRequest, request: Request):
                     cmd.append("--skip-captions")
                 if req.skip_download:
                     cmd.append("--skip-download")
+                if req.caption_style and req.caption_style != "classic":
+                    cmd += ["--caption-style", req.caption_style]
 
                 env = os.environ.copy()
                 env["ELEVENLABS_VOICE_ID"] = req.voice

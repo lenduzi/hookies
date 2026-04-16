@@ -28,11 +28,12 @@ def _arg(flag):
     except (ValueError, IndexError):
         return None
 
-PROJECT_ID    = _arg("--project") or "turmbar-hamburg"
-VO_ONLY       = "--vo-only"        in sys.argv
-SKIP_VO       = "--skip-vo"        in sys.argv
-SKIP_CAPTIONS = "--skip-captions"  in sys.argv
-SKIP_DOWNLOAD = "--skip-download"  in sys.argv
+PROJECT_ID     = _arg("--project") or "turmbar-hamburg"
+VO_ONLY        = "--vo-only"        in sys.argv
+SKIP_VO        = "--skip-vo"        in sys.argv
+SKIP_CAPTIONS  = "--skip-captions"  in sys.argv
+SKIP_DOWNLOAD  = "--skip-download"  in sys.argv
+CAPTION_STYLE  = _arg("--caption-style") or "classic"
 
 # ── Project paths ─────────────────────────────────────────────────────────────
 PROJECT_DIR = Path("projects") / PROJECT_ID
@@ -151,8 +152,10 @@ if not SKIP_CAPTIONS:
 
         print(f"\n  📝 {stem}")
         words = transcribe_audio(vo_mp3)
-        print(f"     {len(words)} words — burning captions...")
-        burn_captions(video_path, words, final_captioned)
+        print(f"     {len(words)} words — burning captions ({CAPTION_STYLE} style)...")
+        project_key_words = meta.get("key_words") or None
+        burn_captions(video_path, words, final_captioned,
+                      style=CAPTION_STYLE, key_words=project_key_words)
         size_mb = os.path.getsize(final_captioned) / (1024 * 1024)
         print(f"     ✅ {Path(final_captioned).name} ({size_mb:.1f} MB)")
         captioned_paths.append(final_captioned)
