@@ -60,7 +60,7 @@ export default function Home() {
   const [syncingDrive, setSyncingDrive] = useState(false);
   // pipeline
   const [voice,          setVoice]          = useState("FGY2WhTYpPnrIDTdsKH5"); // Laura (ElevenLabs default)
-  const [captionStyle,   setCaptionStyle]   = useState("classic");
+  const [captionStyle,   setCaptionStyle]   = useState("highlight");
   const [skipAssembly,   setSkipAssembly]   = useState(false);
   const [skipVo,         setSkipVo]         = useState(false);
   const [skipCaptions,   setSkipCaptions]   = useState(false);
@@ -586,8 +586,9 @@ export default function Home() {
                     <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Caption style</div>
                     <div style={{display:"flex",gap:6}}>
                       {[
-                        {val:"classic", label:"Classic", desc:"Bold + golden highlights"},
-                        {val:"pill",    label:"Pill",    desc:"Dark background box"},
+                        {val:"highlight", label:"Highlight", desc:"Karaoke — active word bold+yellow"},
+                        {val:"keywords",  label:"Keywords",  desc:"Key words pop, rest subtle"},
+                        {val:"classic",   label:"Classic",   desc:"Bold outline, no background"},
                       ].map(opt=>(
                         <button key={opt.val} onClick={()=>setCaptionStyle(opt.val)} style={{...chipStyle,background:captionStyle===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${captionStyle===opt.val?"var(--accent-border)":"var(--border)"}`}}>
                           <span style={{fontWeight:500,color:captionStyle===opt.val?"var(--accent)":"var(--text-primary)"}}>{opt.label}</span>
@@ -771,6 +772,7 @@ function PillInputRow({label, pills, value, onChange, placeholder}: {
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
+  const isCustom = value.length > 0 && !pills.includes(value);
   return (
     <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
       <div style={{width:130,fontSize:12,color:"var(--text-muted)",flexShrink:0,paddingTop:6}}>{label}</div>
@@ -785,12 +787,22 @@ function PillInputRow({label, pills, value, onChange, placeholder}: {
             }}>{opt}</button>
           ))}
         </div>
-        <input
-          value={value}
-          onChange={e=>onChange(e.target.value)}
-          placeholder={placeholder}
-          style={{...inputStyle}}
-        />
+        <div style={{position:"relative",display:"flex",alignItems:"center"}}>
+          <input
+            value={value}
+            onChange={e=>onChange(e.target.value)}
+            placeholder={placeholder}
+            style={{
+              ...inputStyle,
+              flex:1,
+              border: isCustom ? "1px solid var(--accent-border)" : (inputStyle as React.CSSProperties).border,
+              paddingRight: isCustom ? 28 : undefined,
+            }}
+          />
+          {isCustom && (
+            <span style={{position:"absolute",right:10,fontSize:12,color:"var(--accent)",pointerEvents:"none",lineHeight:1}}>✓</span>
+          )}
+        </div>
       </div>
     </div>
   );
