@@ -105,7 +105,41 @@ Whisper platform
 **What stays the same:**  
 All the AI (angle gen, script gen, AI Edit Plan) still runs. Whisper sends a brief; Hookies generates angles, assembles cuts, returns clean MP4s. Creators do final VO + captions in their preferred tool.
 
-**Estimated effort:** 2 sessions
+### Campaign brief auto-population
+
+**Goal:** zero manual input for creators. When a creator opens Studio from within a Whisper campaign, Hookies reads the campaign + business data and pre-populates the brief automatically — then immediately generates angles. Creator lands on 3 ready angles without typing a word.
+
+**Flow:**
+
+```
+Creator clicks "Create Hookies video" on a campaign page
+  → app.getwhisper.de opens studio.getwhisper.de?campaign_id=xxx in iframe
+  → Hookies reads campaign_id from URL param
+  → Fetches from shared Supabase project:
+      campaigns.title, campaigns.description, campaigns.category,
+      campaigns.requirements (JSONB), campaigns.location
+      businesses.business_name, businesses.description,
+      businesses.website, businesses.instagram_handle, businesses.location
+  → Auto-constructs brief:
+      "[business_name] — [business.description]
+       Campaign: [campaign.title] — [campaign.description]
+       Category: [campaign.category] | Location: [campaign.location]
+       Requirements: [requirements parsed from JSONB]"
+  → Creates project + triggers angle generation immediately
+  → Creator sees the brief pre-filled and 3 angles generating
+```
+
+**What to build:**
+1. **`?campaign_id=` param handler** in Hookies frontend — reads on mount, calls a new `/api/whisper/campaign/{id}` endpoint
+2. **`/api/whisper/campaign/{id}` endpoint** — reads from shared Supabase using the service role key, returns flattened brief string + raw fields
+3. **Auto-create-and-run** — if `campaign_id` param is present, skip the "create project" step and go straight to angles
+4. **Brief field pre-fill** — populate the brief textarea and mark it read-only (creator can unlock to edit)
+
+**For standalone `hookies.app`:** equivalent flow via website URL scraping (already in backlog — creator pastes their URL, Hookies scrapes business name + description).
+
+**Estimated effort:** 1 session (Supabase access is already set up — same project, service role key)
+
+**Estimated effort (total Phase 3):** 3 sessions
 
 ---
 
