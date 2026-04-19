@@ -589,9 +589,9 @@ export default function Home() {
                     <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Caption style</div>
                     <div style={{display:"flex",gap:6}}>
                       {[
-                        {val:"highlight", label:"Highlight", desc:"Karaoke — active word bold+yellow"},
-                        {val:"keywords",  label:"Keywords",  desc:"Key words pop, rest subtle"},
-                        {val:"classic",   label:"Classic",   desc:"Bold outline, no background"},
+                        {val:"highlight", label:"Highlight", desc:"Yellow box behind active word"},
+                        {val:"word",      label:"Word",      desc:"One word at a time, large"},
+                        {val:"classic",   label:"Classic",   desc:"Outline only, key words yellow"},
                       ].map(opt=>(
                         <button key={opt.val} onClick={()=>setCaptionStyle(opt.val)} style={{...chipStyle,background:captionStyle===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${captionStyle===opt.val?"var(--accent-border)":"var(--border)"}`}}>
                           <span style={{fontWeight:500,color:captionStyle===opt.val?"var(--accent)":"var(--text-primary)"}}>{opt.label}</span>
