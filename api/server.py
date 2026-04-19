@@ -29,7 +29,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -245,8 +245,46 @@ def get_scripts(project_id: str):
     return {"cuts": _cuts_with_scripts(project_id)}
 
 
+def _extract_and_save_key_words(project_id: str) -> None:
+    """Background task: read all scripts, ask Claude for highlight words, save to meta.json."""
+    import anthropic
+
+    script_files = list(_scripts_dir(project_id).glob("*.txt"))
+    if not script_files:
+        return
+
+    combined = "\n\n---\n\n".join(f.read_text().strip() for f in script_files if f.read_text().strip())
+    if not combined:
+        return
+
+    prompt = (
+        "Extract caption highlight words from these short-form video scripts.\n\n"
+        f"SCRIPTS:\n{combined}\n\n"
+        "Return 8-12 uppercase words worth highlighting in captions: brand/venue names, "
+        "locations, power words (STUNNING, INCREDIBLE, etc.), numbers, strong verbs. "
+        "Skip filler words.\n\n"
+        'Return ONLY valid JSON, no markdown fences: {"key_words": ["WORD1", "WORD2", ...]}'
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = re.sub(r"```(?:json)?\s*|\s*```", "", msg.content[0].text).strip()
+        key_words = json.loads(raw).get("key_words", [])
+        if key_words:
+            meta = _load_meta(project_id)
+            meta["key_words"] = [w.upper() for w in key_words]
+            (_project_dir(project_id) / "meta.json").write_text(json.dumps(meta, indent=2))
+    except Exception as exc:
+        print(f"  ⚠ key_words extraction failed for {project_id}: {exc}", file=sys.stderr)
+
+
 @app.post("/api/projects/{project_id}/scripts")
-def save_scripts(project_id: str, req: SaveScriptsRequest):
+def save_scripts(project_id: str, req: SaveScriptsRequest, background_tasks: BackgroundTasks):
     plan = _load_plan(project_id)
     cuts_by_id = {c["id"]: c for c in plan.get("cuts", [])}
     for entry in req.scripts:
@@ -255,6 +293,7 @@ def save_scripts(project_id: str, req: SaveScriptsRequest):
             raise HTTPException(status_code=400, detail=f"Unknown cut_id: {entry.cut_id}")
         filename = f"{entry.cut_id}_{cut['name']}.txt"
         (_scripts_dir(project_id) / filename).write_text(entry.script.strip())
+    background_tasks.add_task(_extract_and_save_key_words, project_id)
     return {"ok": True}
 
 

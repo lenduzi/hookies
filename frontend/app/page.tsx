@@ -7,7 +7,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Voice       { id: string; label: string; description: string }
-interface ProjectMeta { id: string; name: string; brief: string; angle?: string; angles?: string[]; drive_url: string; cut_count: number; output_count: number }
+interface ProjectMeta { id: string; name: string; brief: string; angle?: string; angles?: string[]; drive_url: string; cut_count: number; output_count: number; key_words?: string[] }
 interface Cut         { id: string; name: string; label: string; hook: string; vibe: string; assigned_angle: string; script: string; has_clips: boolean }
 interface OutputFile  { name: string; size_mb: number; url: string }
 interface Variant     { label: string; script: string }
@@ -585,20 +585,32 @@ export default function Home() {
                 </div>
                 {/* Caption style */}
                 {!skipCaptions && (
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Caption style</div>
-                    <div style={{display:"flex",gap:6}}>
-                      {[
-                        {val:"highlight", label:"Highlight", desc:"Yellow box behind active word"},
-                        {val:"word",      label:"Word",      desc:"One word at a time, large"},
-                        {val:"classic",   label:"Classic",   desc:"Outline only, key words yellow"},
-                      ].map(opt=>(
-                        <button key={opt.val} onClick={()=>setCaptionStyle(opt.val)} style={{...chipStyle,background:captionStyle===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${captionStyle===opt.val?"var(--accent-border)":"var(--border)"}`}}>
-                          <span style={{fontWeight:500,color:captionStyle===opt.val?"var(--accent)":"var(--text-primary)"}}>{opt.label}</span>
-                          <span style={{fontSize:11,color:"var(--text-muted)"}}>{opt.desc}</span>
-                        </button>
-                      ))}
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Caption style</div>
+                      <div style={{display:"flex",gap:6}}>
+                        {[
+                          {val:"highlight", label:"Highlight", desc:"Yellow box behind active word"},
+                          {val:"word",      label:"Word",      desc:"One word at a time, large"},
+                          {val:"classic",   label:"Classic",   desc:"Outline only, key words yellow"},
+                        ].map(opt=>(
+                          <button key={opt.val} onClick={()=>setCaptionStyle(opt.val)} style={{...chipStyle,background:captionStyle===opt.val?"var(--accent-dim)":"var(--bg-card)",border:`1px solid ${captionStyle===opt.val?"var(--accent-border)":"var(--border)"}`}}>
+                            <span style={{fontWeight:500,color:captionStyle===opt.val?"var(--accent)":"var(--text-primary)"}}>{opt.label}</span>
+                            <span style={{fontSize:11,color:"var(--text-muted)"}}>{opt.desc}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                    {(captionStyle==="highlight"||captionStyle==="classic") && activeProject?.key_words && activeProject.key_words.length>0 && (
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <div style={{fontSize:12,color:"var(--text-muted)",width:110,flexShrink:0}}>Highlight words</div>
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                          {activeProject.key_words.map(w=>(
+                            <span key={w} style={{fontSize:11,padding:"2px 7px",borderRadius:4,background:"var(--accent-dim)",border:"1px solid var(--accent-border)",color:"var(--accent)",fontWeight:600,letterSpacing:"0.03em"}}>{w}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
