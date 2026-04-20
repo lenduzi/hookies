@@ -1073,11 +1073,35 @@ function NewProjectModal({onClose, onCreate}:{
   onClose:()=>void;
   onCreate:(name:string, brief:string, angle:string, driveUrl:string)=>Promise<void>
 }) {
-  const [name,     setName]     = useState("");
-  const [brief,    setBrief]    = useState("");
-  const [angle,    setAngle]    = useState("");
-  const [driveUrl, setDriveUrl] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [name,      setName]      = useState("");
+  const [brief,     setBrief]     = useState("");
+  const [angle,     setAngle]     = useState("");
+  const [driveUrl,  setDriveUrl]  = useState("");
+  const [scrapeUrl, setScrapeUrl] = useState("");
+  const [scraping,  setScraping]  = useState(false);
+  const [creating,  setCreating]  = useState(false);
+
+  async function fetchBrief() {
+    if (!scrapeUrl.trim()) return;
+    setScraping(true);
+    try {
+      const res = await fetch("http://localhost:8000/api/scrape-brief", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({url: scrapeUrl.trim()}),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const {brief: extracted} = await res.json();
+      setBrief(extracted);
+      if (!name.trim()) {
+        try { setName(new URL(scrapeUrl.trim().startsWith("http") ? scrapeUrl.trim() : "https://"+scrapeUrl.trim()).hostname.replace(/^www\./, "")); } catch {}
+      }
+    } catch(e:any) {
+      alert("Could not fetch URL: " + (e.message ?? e));
+    } finally {
+      setScraping(false);
+    }
+  }
 
   async function submit() {
     if (!name.trim()) return;
@@ -1091,6 +1115,24 @@ function NewProjectModal({onClose, onCreate}:{
 
         <Field label="Project name" hint="e.g. Turmbar Hamburg">
           <input value={name} onChange={e=>setName(e.target.value)} placeholder="My awesome venue" style={inputStyle} autoFocus/>
+        </Field>
+
+        <Field label="Brand / venue website" hint="Paste a URL and Claude will extract the brief for you">
+          <div style={{display:"flex",gap:6}}>
+            <input
+              value={scrapeUrl}
+              onChange={e=>setScrapeUrl(e.target.value)}
+              onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); fetchBrief(); } }}
+              placeholder="https://fairgrapes-wein.de"
+              style={{...inputStyle, flex:1}}
+              disabled={scraping}
+            />
+            <button
+              onClick={fetchBrief}
+              disabled={scraping || !scrapeUrl.trim()}
+              style={{padding:"0 14px",borderRadius:7,border:"1px solid var(--border)",background:"var(--bg-input)",color:"var(--text-secondary)",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}
+            >{scraping ? "Fetching…" : "Fetch"}</button>
+          </div>
         </Field>
 
         <Field label="About the venue" hint="Describe the venue/creator, audience, and tone — Claude uses this as context for all scripts">

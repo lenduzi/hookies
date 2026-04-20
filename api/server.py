@@ -100,6 +100,9 @@ class RunRequest(BaseModel):
     skip_download: bool = False
     caption_style: str = "classic"        # "classic" or "pill"
 
+class ScrapeUrlRequest(BaseModel):
+    url: str
+
 
 # ── Project helpers ───────────────────────────────────────────────────────────
 
@@ -170,6 +173,49 @@ def _cuts_with_scripts(project_id: str) -> list[dict]:
 @app.get("/api/voices")
 def get_voices():
     return {"voices": VOICES}
+
+
+@app.post("/api/scrape-brief")
+async def scrape_brief(req: ScrapeUrlRequest):
+    import httpx
+    import anthropic
+    import re as _re
+
+    url = req.url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            html = resp.text
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
+
+    # strip tags, collapse whitespace
+    text = _re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=_re.S)
+    text = _re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=_re.S)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = _re.sub(r"\s+", " ", text).strip()
+    text = text[:8000]  # cap context sent to Claude
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=400,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Here is text scraped from a brand/venue website ({url}):\n\n{text}\n\n"
+                "Write a concise project brief (3-5 sentences) suitable for generating short-form social media video scripts. "
+                "Include: what the brand/venue is, what they offer, their target audience, and tone/personality. "
+                "Be specific — name the brand and include concrete details. Write in plain text, no markdown."
+            ),
+        }],
+    )
+    brief = msg.content[0].text.strip()
+    return {"brief": brief}
 
 
 @app.get("/api/projects")

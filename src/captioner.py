@@ -250,12 +250,20 @@ def burn_captions(video_path: str, words: list, output_path: str,
                                             index=FONT_INDEX_REGULAR)
                 ww, wh = measure(text, f)
 
+            # Get raw textbbox offsets — at large font sizes bb[1] > 0, so drawing
+            # at (pad, pad) places the text bottom outside img_h = wh + 2*pad.
+            # Drawing at (pad - bb[0], pad - bb[1]) keeps the bbox fully inside.
+            _dummy_img = Image.new("RGBA", (1, 1))
+            bb = ImageDraw.Draw(_dummy_img).textbbox((0, 0), text, font=f)
+            draw_x = OUTLINE_WIDTH + 6 - bb[0]
+            draw_y = OUTLINE_WIDTH + 6 - bb[1]
+
             pad   = OUTLINE_WIDTH + 6
             img_w = ww + pad * 2
             img_h = wh + pad * 2
 
             img  = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
-            _draw_outlined_text(ImageDraw.Draw(img), (pad, pad),
+            _draw_outlined_text(ImageDraw.Draw(img), (draw_x, draw_y),
                                 text, f, TEXT_COLOR, OUTLINE_COLOR, OUTLINE_WIDTH + 2)
 
             x_pos = (W - img_w) // 2
