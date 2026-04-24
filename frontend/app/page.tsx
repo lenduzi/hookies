@@ -111,6 +111,12 @@ export default function Home() {
     // Populate angles from meta (prefer multi-angle list, fall back to single angle)
     const metaAngles: string[] = projectData.project?.angles || (projectData.project?.angle ? [projectData.project.angle] : []);
     setAngleContents(metaAngles);
+    // Hydrate the rest of the angle-generation settings from meta so they persist
+    // across project switches and page reloads.
+    setAngleCta(projectData.project?.cta || "");
+    setAnglePlatform(projectData.project?.platform || "");
+    setAngleLanguage(projectData.project?.language || "auto");
+    setAngleExtra(projectData.project?.extra || "");
     const rawCuts: PlanCut[] = (projectData.plan?.cuts||[]).map((c: Record<string,unknown>) => ({
       id: c.id as string,
       name: c.name as string,
@@ -235,7 +241,24 @@ export default function Home() {
             if (msg.event === "progress") setAiPlanLogs(prev=>[...prev, msg.message]);
             if (msg.event === "done") {
               setAiPlanLogs(prev=>[...prev, "Done! Plan updated."]);
-              await loadProject(activeId);
+              // Merge only the clip/trim/transition changes. Avoid a full loadProject
+              // — that would clobber unsaved in-flight UI state (selected angles,
+              // edited scripts) by re-reading meta.json where they aren't persisted.
+              const newCuts: Array<Record<string, unknown>> = msg.plan?.cuts || [];
+              if (newCuts.length) {
+                const byId = new Map(newCuts.map(c => [c.id as string, c]));
+                setPlanCuts(prev => prev.map(pc => {
+                  const nc = byId.get(pc.id);
+                  if (!nc) return pc;
+                  return {
+                    ...pc,
+                    clips: (nc.clips || pc.clips) as string[],
+                    trim: (nc.trim || pc.trim) as Record<string, TrimPoint>,
+                    transition: (nc.transition || pc.transition) as string,
+                  };
+                }));
+                setPlanDirty(false);
+              }
             }
             if (msg.event === "error") setAiPlanLogs(prev=>[...prev, `Error: ${msg.message}`]);
           } catch {}
@@ -318,7 +341,9 @@ export default function Home() {
     try {
       const d = await fetch(`${API}/api/projects/${activeId}/generate`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({cut_id:cutId}),
+        // Send the live UI CTA so regenerates respect whatever's currently set,
+        // without relying on meta.json having been updated on a prior angles run.
+        body: JSON.stringify({cut_id:cutId, cta:angleCta}),
       }).then(r=>r.json());
       setVariants({cutId, items:d.variants||[]});
     } catch { alert("Generation failed — check API key"); }
@@ -1075,7 +1100,6 @@ function NewProjectModal({onClose, onCreate}:{
 }) {
   const [name,      setName]      = useState("");
   const [brief,     setBrief]     = useState("");
-  const [angle,     setAngle]     = useState("");
   const [driveUrl,  setDriveUrl]  = useState("");
   const [scrapeUrl, setScrapeUrl] = useState("");
   const [scraping,  setScraping]  = useState(false);
@@ -1090,14 +1114,18 @@ function NewProjectModal({onClose, onCreate}:{
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({url: scrapeUrl.trim()}),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try { const body = await res.json(); if (body.detail) detail = body.detail; } catch {}
+        throw new Error(detail);
+      }
       const {brief: extracted} = await res.json();
       setBrief(extracted);
       if (!name.trim()) {
         try { setName(new URL(scrapeUrl.trim().startsWith("http") ? scrapeUrl.trim() : "https://"+scrapeUrl.trim()).hostname.replace(/^www\./, "")); } catch {}
       }
     } catch(e:any) {
-      alert("Could not fetch URL: " + (e.message ?? e));
+      alert("Couldn't extract brief from that URL.\n\n" + (e.message ?? e) + "\n\nYou can still write the brief manually below.");
     } finally {
       setScraping(false);
     }
@@ -1105,7 +1133,7 @@ function NewProjectModal({onClose, onCreate}:{
 
   async function submit() {
     if (!name.trim()) return;
-    setCreating(true); await onCreate(name.trim(), brief.trim(), angle.trim(), driveUrl.trim()); setCreating(false);
+    setCreating(true); await onCreate(name.trim(), brief.trim(), "", driveUrl.trim()); setCreating(false);
   }
 
   return (
@@ -1137,22 +1165,6 @@ function NewProjectModal({onClose, onCreate}:{
 
         <Field label="About the venue" hint="Describe the venue/creator, audience, and tone — Claude uses this as context for all scripts">
           <textarea rows={3} value={brief} onChange={e=>setBrief(e.target.value)} placeholder="A cocktail class venue in Hamburg targeting young professionals. Warm, self-deprecating tone." style={textareaStyle}/>
-        </Field>
-
-        <Field label="Content angle" hint="What should the video be about? Pick a preset or write your own (you can change this later)">
-          <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {ANGLE_PILLS.map(opt=>(
-                <button key={opt} onClick={()=>setAngle(opt)} style={{
-                  padding:"4px 10px", borderRadius:5, fontSize:12, cursor:"pointer",
-                  background: angle===opt ? "var(--accent-dim)" : "var(--bg-card)",
-                  border: `1px solid ${angle===opt ? "var(--accent-border)" : "var(--border)"}`,
-                  color: angle===opt ? "var(--accent)" : "var(--text-secondary)",
-                }}>{opt}</button>
-              ))}
-            </div>
-            <input value={angle} onChange={e=>setAngle(e.target.value)} placeholder="e.g. 'Hidden gem in Hamburg'" style={inputStyle}/>
-          </div>
         </Field>
 
         <Field label="Google Drive folder URL" hint="Optional — leave empty to use local clips">

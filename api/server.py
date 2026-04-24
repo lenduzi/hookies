@@ -83,6 +83,7 @@ class SaveScriptsRequest(BaseModel):
 class GenerateRequest(BaseModel):
     cut_id: str          # e.g. "cut_1"
     tone_hint: str = ""  # optional extra nudge
+    cta: str = ""        # override CTA for this regenerate; falls back to meta.cta
 
 class GenerateAnglesRequest(BaseModel):
     platform: str = ""          # e.g. "TikTok / Reels"
@@ -175,47 +176,103 @@ def get_voices():
     return {"voices": VOICES}
 
 
+def _html_to_text(html: str) -> str:
+    import re as _re
+    text = _re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=_re.S | _re.I)
+    text = _re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=_re.S | _re.I)
+    text = _re.sub(r"<noscript[^>]*>.*?</noscript>", " ", text, flags=_re.S | _re.I)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    # HTML entities — good enough for the common ones
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&#x27;", "'")
+    text = text.replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">")
+    return _re.sub(r"\s+", " ", text).strip()
+
+
+# Subpaths we'll try in addition to the root; common "about us" locations in EN/DE
+_ABOUT_PATHS = ("", "/about", "/about-us", "/ueber-uns", "/uber-uns", "/story", "/who-we-are")
+
+
 @app.post("/api/scrape-brief")
 async def scrape_brief(req: ScrapeUrlRequest):
     import httpx
     import anthropic
-    import re as _re
+    from urllib.parse import urljoin, urlparse
 
-    url = req.url.strip()
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    raw_url = req.url.strip()
+    if not raw_url.startswith(("http://", "https://")):
+        raw_url = "https://" + raw_url
 
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            html = resp.text
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Could not fetch URL: {e}")
+    parsed = urlparse(raw_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+    }
 
-    # strip tags, collapse whitespace
-    text = _re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=_re.S)
-    text = _re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=_re.S)
-    text = _re.sub(r"<[^>]+>", " ", text)
-    text = _re.sub(r"\s+", " ", text).strip()
-    text = text[:8000]  # cap context sent to Claude
+    pages: list[tuple[str, str]] = []  # (url, text)
+    errors: list[str] = []
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15, headers=headers) as client:
+        # Always try the user-supplied URL first, then common about-page paths off its origin.
+        candidates = [raw_url] + [urljoin(base, p) for p in _ABOUT_PATHS if urljoin(base, p) != raw_url]
+        seen = set()
+        for url in candidates:
+            if url in seen or len(pages) >= 3:
+                continue
+            seen.add(url)
+            try:
+                resp = await client.get(url)
+                if resp.status_code >= 400:
+                    errors.append(f"{url} → HTTP {resp.status_code}")
+                    continue
+                text = _html_to_text(resp.text)
+                if len(text) < 200:
+                    errors.append(f"{url} → only {len(text)} chars of text (likely JS-rendered)")
+                    continue
+                pages.append((str(resp.url), text))
+            except Exception as e:
+                errors.append(f"{url} → {type(e).__name__}: {e}")
+
+    if not pages:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Could not extract any readable text from the site. "
+                "This often happens with single-page apps that render content via JavaScript. "
+                "Tried: " + "; ".join(errors[:4])
+            ),
+        )
+
+    combined = "\n\n---\n\n".join(f"# {url}\n{text[:4000]}" for url, text in pages)
+    combined = combined[:12000]  # cap total context
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     msg = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=400,
+        max_tokens=300,
         messages=[{
             "role": "user",
             "content": (
-                f"Here is text scraped from a brand/venue website ({url}):\n\n{text}\n\n"
-                "Write a concise project brief (3-5 sentences) suitable for generating short-form social media video scripts. "
-                "Include: what the brand/venue is, what they offer, their target audience, and tone/personality. "
-                "Be specific — name the brand and include concrete details. Write in plain text, no markdown."
+                f"Below is raw text from up to 3 pages of a brand/venue's website (origin: {base}).\n\n"
+                f"{combined}\n\n"
+                "Distill this into a short project brief for short-form UGC video scripts.\n\n"
+                "Target: 2–3 sentences, max ~60 words. Capture:\n"
+                "• what the place actually IS, in plain words (not marketing copy)\n"
+                "• what someone DOES there — the sensory/experiential core (what you see, taste, touch)\n"
+                "• the tone and who it's for\n\n"
+                "Hard rules — these kill the output if violated:\n"
+                "• Do NOT list cities or locations. \"A wine-and-paint bar\" beats \"with locations in Frankfurt, Munich, Hamburg, and Berlin.\"\n"
+                "• Do NOT enumerate products, services, or event formats. \"You drink wine while you paint\" beats \"formats like Techno & Paint, Blind Tasting, Aktmalerei, Aquarellkurs.\"\n"
+                "• Do NOT include founding year, founder names, or company history unless it's essential to the vibe.\n"
+                "• Do NOT write like a press release or an elevator pitch. Write like you're describing the place to a friend over a drink.\n\n"
+                "Write in the same language as the source content. Plain text, no preamble, no markdown."
             ),
         }],
     )
     brief = msg.content[0].text.strip()
-    return {"brief": brief}
+    return {"brief": brief, "pages_used": [u for u, _ in pages]}
 
 
 @app.get("/api/projects")
@@ -358,10 +415,19 @@ Vibe: {vibe}
 
 Write exactly 3 alternative voiceover scripts for this cut. Each should:
 - Be 40–60 words (fits a ~30 second clip at natural speaking pace)
-- Feel authentic and conversational, not like an ad
-- Match the vibe described above
+- Feel like a real person talking to a friend, not an ad — contractions, hedges, sentence fragments are all fine
+- Match the vibe and hook concept described above (don't drift to a different angle)
 - Vary meaningfully — different openers, different structures, different emotional angles
-- End with a soft CTA (link in bio, details in bio, etc.)
+- Open a LOOP in the first line (curiosity, contrast, bold claim, POV, number, question, or direct address) — a reason to keep watching
+- Reference ONE sensory/experiential detail from the brief (what you see, taste, do) — not a factoid
+- End with this call to action — use the exact words or a close natural paraphrase: "{cta}"
+
+NEVER do these — instant rejection:
+✗ List cities or locations (e.g. "in Frankfurt, München, Hamburg und Berlin")
+✗ Enumerate products, formats, or services (e.g. "Formate wie X, Y und Z")
+✗ Include founding year, founders' names, or company history
+✗ Marketing speak ("einzigartig", "eine Mischung aus", "unvergesslich")
+✗ Anything that sounds like a website About page
 
 Return ONLY valid JSON in this exact shape, no markdown fences:
 {{
@@ -386,12 +452,15 @@ def generate_scripts(project_id: str, req: GenerateRequest):
     if req.tone_hint:
         brief += f"\n\nExtra tone note: {req.tone_hint}"
 
+    cta = req.cta or meta.get("cta") or "Link in bio"
+
     prompt = GENERATION_PROMPT.format(
         brief=brief,
         cut_id=cut["id"],
         label=cut.get("label", cut["name"]),
         hook=cut.get("hook", ""),
         vibe=cut.get("vibe", ""),
+        cta=cta,
     )
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -419,13 +488,37 @@ ANGLES_PROMPT = """You are writing voiceover scripts for short-form social media
 ━━━ VENUE / PROJECT BRIEF ━━━
 {brief}
 
+━━━ HOOK PATTERNS — every hook MUST use one of these structures ━━━
+The first line of each script is the hook. It has ~3 seconds to stop the scroll. Pick a DIFFERENT pattern for each cut.
+
+• Curiosity gap     — "Das Weirdeste an diesem Ort ist..." / "The weirdest thing about this place is..."
+• Negation / secret — "Niemand spricht darüber, aber..." / "Nobody tells you that..."
+• Specific number   — "3 Gründe, warum ich hier jedes Wochenende hingehe..." / "3 things I wish I knew before..."
+• POV framing       — "POV: Du entdeckst gerade..." / "POV: you just found..."
+• Personal contrast — "Ich war skeptisch, bis..." / "I thought X until..."  (before/after builds a loop)
+• Direct address    — "Wenn du in [stadt] wohnst und das nicht kennst..." / "If you live in X and haven't tried this..."
+• Bold claim        — "Das ist der unterschätzteste Abend in [stadt]." / "This is the most underrated spot in X."
+• Question          — "Warum redet niemand über..." / "Why isn't anyone talking about..."
+
+Rules for hooks:
+• Must open a LOOP — a reason to keep watching to get the payoff.
+• Must be SPECIFIC — a sensory or personal detail, not a generic pitch. "ein Glas Wein in der Hand" beats "creative experiences."
+• No throat-clearing ("Also..." / "So..."). First word matters.
+
 ━━━ OUTPUT RULES — follow every rule, no exceptions ━━━
 1. LANGUAGE: Write every script in {language}.
-2. VENUE: Every script must name the venue and include at least one concrete detail from the brief (a specific event, feature, or experience mentioned above).
+2. VENUE: Every script must name the venue once. Use ONE sensory/experiential detail from the brief (what you see, taste, do) — not a factoid. NEVER list cities, formats, events, or services. NEVER use phrases like "mit Standorten in..." or "they have locations in..." or "Formate wie X, Y und Z." One venue, one vivid detail, that's it.
 3. CTA: Every script must end with this call to action — use the exact words or a close natural paraphrase: "{cta}"
-4. LENGTH: 40–60 words per script. Conversational UGC tone — sounds like a real person, not an ad.
+4. LENGTH: 40–60 words per script. Conversational UGC — sounds like a real person talking to a friend, not an ad. Contractions, hedges ("ich mein", "ehrlich", "also"), sentence fragments and half-thoughts are all fine. When in doubt, make it SHORTER and more casual.
 5. PLATFORM: {platform}
 {extra_line}
+━━━ ANTI-PATTERNS — instant rejection ━━━
+✗ "X hat Standorte in Frankfurt, München, Hamburg und Berlin"  (enumeration)
+✗ "Formate wie Techno & Paint, Blind Tasting oder Aktmalerei"   (list of services)
+✗ "Gegründet 2018 von..."                                        (press-release)
+✗ "bietet eine einzigartige Mischung aus..."                     (marketing speak)
+✗ Anything that sounds like a website "About" page.
+
 ━━━ ANGLE ASSIGNMENTS ━━━
 {angle_assignments}
 
@@ -571,13 +664,21 @@ def generate_angles(project_id: str, req: GenerateAnglesRequest):
                 import sys
                 print(f"  ⚠ angle mismatch cut_{i+1}: expected '{angles[i]}' got '{returned}'", file=sys.stderr)
 
-    # Persist key_words + angles back to meta
+    # Persist key_words + angles + cta back to meta so per-cut regenerates inherit them
     key_words = result.get("key_words", [])
     if key_words:
         meta["key_words"] = key_words
     if angles:
         meta["angles"] = angles
         meta["angle"] = angles[0]  # backward compat
+    if req.cta:
+        meta["cta"] = req.cta
+    if req.platform:
+        meta["platform"] = req.platform
+    if req.language and req.language != "auto":
+        meta["language"] = req.language
+    if req.extra:
+        meta["extra"] = req.extra
     (_project_dir(project_id) / "meta.json").write_text(json.dumps(meta, indent=2))
 
     # Load existing plan to preserve clips/trim data
